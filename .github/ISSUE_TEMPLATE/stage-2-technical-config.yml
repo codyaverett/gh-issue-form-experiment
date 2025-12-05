@@ -3,20 +3,20 @@ description: "Step 2 of 3 - Configure technical details for your project"
 title: "[PROJECT-S2] "
 labels: ["form-submission", "stage-2", "wizard"]
 body:
-  - type: input
-    id: stage1_issue
-    attributes:
-      label: Stage 1 Issue Reference
-      description: "Reference to your Stage 1 project info issue (auto-populated from link)"
-      placeholder: "#123"
-    validations:
-      required: true
-
   - type: markdown
     attributes:
       value: |
         ## Step 2 of 3: Technical Configuration
         Configure the technical stack for your project.
+
+  - type: input
+    id: stage1_issue
+    attributes:
+      label: Stage 1 Issue Reference
+      description: Reference to your Stage 1 project info issue (auto-populated from link)
+      placeholder: "#123"
+    validations:
+      required: true
 
   - type: dropdown
     id: language
