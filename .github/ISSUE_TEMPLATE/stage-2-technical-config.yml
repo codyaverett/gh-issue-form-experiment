@@ -3,12 +3,6 @@ description: "Step 2 of 3 - Configure technical details for your project"
 title: "[PROJECT-S2] "
 labels: ["form-submission", "stage-2", "wizard"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        ## Step 2 of 3: Technical Configuration
-        Configure the technical stack for your project.
-
   - type: input
     id: stage1_issue
     attributes:
@@ -18,17 +12,22 @@ body:
     validations:
       required: true
 
+  - type: markdown
+    attributes:
+      value: |
+        ## Step 2 of 3: Technical Configuration
+        Configure the technical stack for your project.
+
   - type: dropdown
     id: language
     attributes:
       label: Primary Language
+      description: Select the main programming language
       options:
-        - TypeScript
-        - JavaScript
-        - Python
-        - Go
-        - Rust
-        - Java
+        - "TypeScript"
+        - "JavaScript"
+        - "Python"
+        - "Go"
     validations:
       required: true
 
@@ -36,37 +35,20 @@ body:
     id: framework
     attributes:
       label: Framework
+      description: Select the framework to use
       options:
-        - React
-        - Vue
-        - Next.js
-        - Express
-        - FastAPI
-        - Django
-        - None
+        - "React"
+        - "Vue"
+        - "Express"
+        - "None"
     validations:
       required: true
 
-  - type: dropdown
-    id: environment
+  - type: textarea
+    id: additional_config
     attributes:
-      label: Target Environments
-      options:
-        - "Development Only"
-        - "Dev + Staging"
-        - "Dev + Staging + Production"
+      label: Additional Configuration
+      description: Any additional technical requirements
+      placeholder: "Any additional context..."
     validations:
-      required: true
-
-  - type: checkboxes
-    id: features
-    attributes:
-      label: Required Features
-      description: Select all features needed for your project
-      options:
-        - label: "Database (PostgreSQL/MySQL)"
-        - label: "Redis Cache"
-        - label: "Message Queue"
-        - label: "File Storage (S3)"
-        - label: Authentication
-        - label: "CI/CD Pipeline"
+      required: false
