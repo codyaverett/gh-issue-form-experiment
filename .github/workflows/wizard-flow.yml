@@ -2,19 +2,15 @@ name: Three-Stage Wizard Flow
 
 on:
   issues:
-    types: [opened, edited]
+    types: [opened]
 
 permissions:
   issues: write
   contents: read
 
 jobs:
-  # ============================================
-  # Handle all wizard form submissions
-  # ============================================
   process-wizard-form:
     runs-on: ubuntu-latest
-    # Check if any label name equals 'wizard'
     if: ${{ contains(join(github.event.issue.labels.*.name, ','), 'wizard') }}
 
     steps:
@@ -78,7 +74,7 @@ jobs:
 
             // Get or create workflow ID
             let workflowId = formData.workflowId;
-            if (!workflowId || workflowId === '_No response_') {
+            if (!workflowId || workflowId === '_No response_' || workflowId === null) {
               workflowId = `wizard-${context.runId}`;
             }
 
@@ -87,118 +83,86 @@ jobs:
             core.setOutput('form_data', JSON.stringify(formData));
             core.setOutput('issue_number', issueNumber.toString());
 
-      - name: Close Current Form Issue
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const stage = parseInt('${{ steps.parse.outputs.stage }}');
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## Stage ${stage} Complete ✓\n\nForm data received. ${stage < 3 ? 'Creating next stage form...' : 'Processing final submission...'}\n\nWorkflow ID: \`${{ steps.parse.outputs.workflow_id }}\``
-            });
-
-            await github.rest.issues.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              state: 'closed'
-            });
-
       # ----------------------------------------
-      # Stage 1 -> Create Stage 2 form
+      # Stage 1 -> Link to Stage 2 form
       # ----------------------------------------
-      - name: "Stage 1 → Create Stage 2 Form"
+      - name: "Stage 1 → Provide Stage 2 Form Link"
         if: steps.parse.outputs.stage == '1'
         uses: actions/github-script@v7
         with:
           script: |
             const formData = JSON.parse('${{ steps.parse.outputs.form_data }}');
             const workflowId = '${{ steps.parse.outputs.workflow_id }}';
+            const repo = context.repo;
 
             // Save state for later stages
             const state = {
               stage1: formData,
-              workflowId: workflowId
+              workflowId: workflowId,
+              originalIssue: context.issue.number
             };
-
-            // Create Stage 2 form issue
-            const stage2Body = `### Workflow ID
-
-            ${workflowId}
-
-            ### Primary Language
-
-            _No response_
-
-            ### Framework
-
-            _No response_
-
-            ### Required Features
-
-            - [ ] Database (PostgreSQL/MySQL)
-            - [ ] Redis Cache
-            - [ ] Message Queue
-            - [ ] File Storage (S3)
-            - [ ] Authentication
-            - [ ] CI/CD Pipeline
-
-            ### Target Environment
-
-            _No response_
-
-            ---
-            **Project from Stage 1:**
-            - **Name:** ${formData.projectName}
-            - **Type:** ${formData.projectType}
-            - **Team:** ${formData.teamSize}`;
-
-            const newIssue = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `[TECH CONFIG] ${formData.projectName}`,
-              body: stage2Body,
-              labels: ['form-submission', 'stage-2', 'wizard']
-            });
 
             // Store state in a state issue
             await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner: repo.owner,
+              repo: repo.repo,
               title: `[STATE] ${workflowId}`,
               body: `## Wizard State\n\n\`\`\`json\n${JSON.stringify(state, null, 2)}\n\`\`\``,
               labels: ['workflow-state']
             });
 
-            console.log(`Created Stage 2 form: #${newIssue.data.number}`);
-            console.log(`Stage 2 URL: ${newIssue.data.html_url}`);
+            // Build pre-filled URL for Stage 2 form
+            const stage2Url = `https://github.com/${repo.owner}/${repo.repo}/issues/new?template=stage-2-technical.yml&workflow_id=${encodeURIComponent(workflowId)}`;
 
-            // Comment on original with link
+            // Close current issue and provide link to next stage
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: ${{ steps.parse.outputs.issue_number }},
-              body: `## Next Step: Stage 2\n\nPlease continue with the technical configuration:\n\n**→ #${newIssue.data.number}**`
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: context.issue.number,
+              body: `## Stage 1 Complete ✓
+
+            **Project:** ${formData.projectName}
+            **Type:** ${formData.projectType}
+            **Team:** ${formData.teamSize}
+
+            ---
+
+            ### Next Step: Stage 2 - Technical Configuration
+
+            Click the link below to continue with the interactive form:
+
+            ### **[→ Continue to Stage 2](${stage2Url})**
+
+            ---
+            Workflow ID: \`${workflowId}\``
             });
 
+            await github.rest.issues.update({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              labels: [...context.payload.issue.labels.map(l => l.name), 'processed']
+            });
+
+            console.log(`Stage 2 form URL: ${stage2Url}`);
+
       # ----------------------------------------
-      # Stage 2 -> Create Stage 3 form
+      # Stage 2 -> Link to Stage 3 form
       # ----------------------------------------
-      - name: "Stage 2 → Create Stage 3 Form"
+      - name: "Stage 2 → Provide Stage 3 Form Link"
         if: steps.parse.outputs.stage == '2'
         uses: actions/github-script@v7
         with:
           script: |
             const formData = JSON.parse('${{ steps.parse.outputs.form_data }}');
             const workflowId = '${{ steps.parse.outputs.workflow_id }}';
+            const repo = context.repo;
 
             // Load existing state
             const stateIssues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner: repo.owner,
+              repo: repo.repo,
               labels: 'workflow-state',
               state: 'open'
             });
@@ -215,74 +179,60 @@ jobs:
 
               // Update state issue
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: repo.owner,
+                repo: repo.repo,
                 issue_number: stateIssue.number,
                 body: `## Wizard State\n\n\`\`\`json\n${JSON.stringify(state, null, 2)}\n\`\`\``
               });
             }
 
-            // Build summary for review
+            // Build summary for display
             const stage1 = state.stage1 || {};
             const features = (formData.requiredFeatures || [])
               .filter(f => f.checked)
-              .map(f => `- ${f.label}`)
-              .join('\n') || '- None selected';
+              .map(f => `✓ ${f.label}`)
+              .join('\n') || 'None selected';
 
-            const summary = `| Setting | Value |
-            |---------|-------|
-            | **Project Name** | ${stage1.projectName || 'N/A'} |
-            | **Project Type** | ${stage1.projectType || 'N/A'} |
-            | **Team Size** | ${stage1.teamSize || 'N/A'} |
-            | **Owner** | ${stage1.ownerEmail || 'N/A'} |
-            | **Language** | ${formData.primaryLanguage || 'N/A'} |
-            | **Framework** | ${formData.framework || 'N/A'} |
-            | **Environment** | ${formData.targetEnvironment || 'N/A'} |
+            // Build pre-filled URL for Stage 3 form
+            const stage3Url = `https://github.com/${repo.owner}/${repo.repo}/issues/new?template=stage-3-review.yml&workflow_id=${encodeURIComponent(workflowId)}`;
+
+            // Close current issue and provide link to next stage
+            await github.rest.issues.createComment({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: context.issue.number,
+              body: `## Stage 2 Complete ✓
+
+            **Language:** ${formData.primaryLanguage || 'N/A'}
+            **Framework:** ${formData.framework || 'N/A'}
+            **Environment:** ${formData.targetEnvironment || 'N/A'}
 
             **Features:**
+            \`\`\`
             ${features}
+            \`\`\`
 
-            **Description:**
-            ${stage1.projectDescription || 'N/A'}`;
+            ---
 
-            // Create Stage 3 form
-            const stage3Body = `### Workflow ID
+            ### Next Step: Stage 3 - Review & Confirm
 
-            ${workflowId}
+            Click the link below to review and confirm your project:
 
-            ### Project Summary
+            ### **[→ Continue to Stage 3 (Final)](${stage3Url})**
 
-            ${summary}
-
-            ### Confirmation
-
-            _No response_
-
-            ### Additional Notes
-
-            _No response_
-
-            ### Acknowledgments
-
-            - [ ] I have reviewed all the project details
-            - [ ] I understand this will create resources`;
-
-            const newIssue = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `[CONFIRM] ${stage1.projectName || 'Project'}`,
-              body: stage3Body,
-              labels: ['form-submission', 'stage-3', 'wizard']
+            ---
+            Workflow ID: \`${workflowId}\``
             });
 
-            console.log(`Created Stage 3 form: #${newIssue.data.number}`);
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: ${{ steps.parse.outputs.issue_number }},
-              body: `## Next Step: Stage 3 (Final)\n\nPlease review and confirm:\n\n**→ #${newIssue.data.number}**`
+            await github.rest.issues.update({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              labels: [...context.payload.issue.labels.map(l => l.name), 'processed']
             });
+
+            console.log(`Stage 3 form URL: ${stage3Url}`);
 
       # ----------------------------------------
       # Stage 3 -> Complete workflow
@@ -294,11 +244,12 @@ jobs:
           script: |
             const formData = JSON.parse('${{ steps.parse.outputs.form_data }}');
             const workflowId = '${{ steps.parse.outputs.workflow_id }}';
+            const repo = context.repo;
 
             // Load full state
             const stateIssues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner: repo.owner,
+              repo: repo.repo,
               labels: 'workflow-state',
               state: 'open'
             });
@@ -336,9 +287,11 @@ jobs:
 
             const finalSummary = `## Wizard Complete ${confirmed ? '✅' : '❌'}
 
-            **Status:** ${confirmed ? 'CONFIRMED - Resources will be created' : 'CANCELLED'}
+            **Status:** ${confirmed ? 'CONFIRMED - Ready for resource creation' : 'CANCELLED'}
 
-            ### Collected Data
+            ---
+
+            ### Summary of All Stages
 
             | Stage | Field | Value |
             |-------|-------|-------|
@@ -365,33 +318,40 @@ jobs:
             **Workflow ID:** \`${workflowId}\`
             **Run ID:** \`${{ github.run_id }}\``;
 
-            // Post final summary
+            // Post final summary and close
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: ${{ steps.parse.outputs.issue_number }},
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: context.issue.number,
               body: finalSummary
+            });
+
+            await github.rest.issues.update({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              labels: [...context.payload.issue.labels.map(l => l.name), 'processed', 'completed']
             });
 
             // Close state issue
             if (stateIssue) {
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: repo.owner,
+                repo: repo.repo,
                 issue_number: stateIssue.number,
                 state: 'closed'
               });
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: repo.owner,
+                repo: repo.repo,
                 issue_number: stateIssue.number,
                 body: `Wizard completed. Final state:\n\n\`\`\`json\n${JSON.stringify(fullState, null, 2)}\n\`\`\``
               });
             }
 
             if (confirmed) {
-              console.log('🎉 Project confirmed! Would trigger resource creation here.');
-              // Here you would trigger actual resource creation workflows
+              console.log('Project confirmed! Ready for resource creation.');
             } else {
-              console.log('❌ Project cancelled by user.');
+              console.log('Project cancelled by user.');
             }
