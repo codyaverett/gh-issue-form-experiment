@@ -13,7 +13,7 @@ body:
     id: stage1_issue
     attributes:
       label: Stage 1 Issue Reference
-      description: Reference to your Stage 1 project info issue (auto-populated from link)
+      description: "Reference to your Stage 1 project info issue (auto-populated from link)"
       placeholder: "#123"
     validations:
       required: true
@@ -52,9 +52,9 @@ body:
     attributes:
       label: Target Environments
       options:
-        - Development Only
-        - Dev + Staging
-        - Dev + Staging + Production
+        - "Development Only"
+        - "Dev + Staging"
+        - "Dev + Staging + Production"
     validations:
       required: true
 
@@ -64,9 +64,9 @@ body:
       label: Required Features
       description: Select all features needed for your project
       options:
-        - label: Database (PostgreSQL/MySQL)
-        - label: Redis Cache
-        - label: Message Queue
-        - label: File Storage (S3)
+        - label: "Database (PostgreSQL/MySQL)"
+        - label: "Redis Cache"
+        - label: "Message Queue"
+        - label: "File Storage (S3)"
         - label: Authentication
-        - label: CI/CD Pipeline
+        - label: "CI/CD Pipeline"
