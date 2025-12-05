@@ -1,0 +1,477 @@
+name: Deployment Orchestrator
+
+on:
+  workflow_dispatch:
+    inputs:
+      form_data:
+        description: 'JSON form data from issue'
+        required: true
+        type: string
+      issue_number:
+        description: 'Original issue number'
+        required: true
+        type: string
+      workflow_id:
+        description: 'Workflow instance ID for state tracking'
+        required: true
+        type: string
+      step_number:
+        description: 'Current step in the workflow (0=initial, 1=after approval)'
+        required: false
+        type: string
+        default: '0'
+      state_issue_number:
+        description: 'State issue number (for cleanup)'
+        required: false
+        type: string
+
+jobs:
+  # ============================================
+  # STEP 0: Initial Processing
+  # ============================================
+  initialize:
+    runs-on: ubuntu-latest
+    outputs:
+      form_data: ${{ steps.load.outputs.form_data }}
+      workflow_id: ${{ inputs.workflow_id }}
+      current_step: ${{ inputs.step_number }}
+      app_name: ${{ steps.extract.outputs.app_name }}
+      environment: ${{ steps.extract.outputs.environment }}
+      version: ${{ steps.extract.outputs.version }}
+      requires_approval: ${{ steps.check.outputs.requires_approval }}
+
+    steps:
+      - name: Load Form Data
+        id: load
+        run: |
+          echo "form_data<<EOF" >> $GITHUB_OUTPUT
+          echo '${{ inputs.form_data }}' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Extract Key Fields
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+
+            console.log('=== Deployment Configuration ===');
+            console.log(JSON.stringify(formData, null, 2));
+
+            // Extract fields (handle different naming conventions)
+            const appName = formData.applicationName || formData.appName || 'unknown';
+            const environment = formData.targetEnvironment || formData.environment || 'unknown';
+            const version = formData.versionTag || formData.version || 'unknown';
+            const regions = formData.deploymentRegions || formData.regions || [];
+            const replicas = formData.numberOfReplicas || formData.replicas || '1';
+
+            console.log(`\nApp: ${appName}`);
+            console.log(`Environment: ${environment}`);
+            console.log(`Version: ${version}`);
+            console.log(`Regions: ${Array.isArray(regions) ? regions.join(', ') : regions}`);
+            console.log(`Replicas: ${replicas}`);
+
+            core.setOutput('app_name', appName);
+            core.setOutput('environment', environment);
+            core.setOutput('version', version);
+            core.setOutput('regions', Array.isArray(regions) ? regions.join(',') : regions);
+            core.setOutput('replicas', replicas);
+
+      - name: Check if Approval Required
+        id: check
+        run: |
+          ENV="${{ steps.extract.outputs.environment }}"
+          if [ "$ENV" = "production" ]; then
+            echo "requires_approval=true" >> $GITHUB_OUTPUT
+            echo "Production deployment - approval required"
+          else
+            echo "requires_approval=false" >> $GITHUB_OUTPUT
+            echo "Non-production deployment - no approval required"
+          fi
+
+  # ============================================
+  # STEP 0: Validation (runs for initial requests)
+  # ============================================
+  validate:
+    needs: initialize
+    if: inputs.step_number == '0'
+    runs-on: ubuntu-latest
+    outputs:
+      validation_passed: ${{ steps.validate.outputs.passed }}
+
+    steps:
+      - name: Validate Deployment Request
+        id: validate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+            const errors = [];
+
+            console.log('=== Validating Deployment Request ===');
+
+            // Check required fields
+            const appName = formData.applicationName || formData.appName;
+            const environment = formData.targetEnvironment || formData.environment;
+            const version = formData.versionTag || formData.version;
+
+            if (!appName) errors.push('Application name is required');
+            if (!environment) errors.push('Target environment is required');
+            if (!version) errors.push('Version/tag is required');
+
+            // Validate version format (basic check)
+            if (version && !/^v?\d+\.\d+\.\d+|^[a-f0-9]{7,40}$/i.test(version)) {
+              console.log(`Warning: Version "${version}" may not be a valid semver or commit SHA`);
+            }
+
+            // Validate replicas
+            const replicas = formData.numberOfReplicas || formData.replicas;
+            if (replicas && (isNaN(replicas) || parseInt(replicas) < 1)) {
+              errors.push('Replicas must be a positive number');
+            }
+
+            // Validate canary percentage
+            const canaryPct = formData.canaryPercentage;
+            if (canaryPct && (isNaN(canaryPct) || parseInt(canaryPct) < 0 || parseInt(canaryPct) > 100)) {
+              errors.push('Canary percentage must be between 0 and 100');
+            }
+
+            const passed = errors.length === 0;
+            console.log(`Validation ${passed ? 'PASSED' : 'FAILED'}`);
+            if (!passed) {
+              console.log('Errors:', errors);
+            }
+
+            core.setOutput('passed', passed.toString());
+            core.setOutput('errors', JSON.stringify(errors));
+
+            return { passed, errors };
+
+  # ============================================
+  # PAUSE: Request Approval (for production deployments)
+  # ============================================
+  request-approval:
+    needs: [initialize, validate]
+    if: |
+      inputs.step_number == '0' &&
+      needs.validate.outputs.validation_passed == 'true' &&
+      needs.initialize.outputs.requires_approval == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Save Workflow State
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowId = '${{ inputs.workflow_id }}';
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+
+            // Create state object
+            const state = {
+              step: 1,
+              formData: formData,
+              originalIssue: ${{ inputs.issue_number }},
+              status: 'awaiting_approval',
+              createdAt: new Date().toISOString()
+            };
+
+            const stateBody = `## Workflow State
+
+            **Status:** Awaiting Approval
+            **Workflow ID:** \`${workflowId}\`
+            **Original Issue:** #${{ inputs.issue_number }}
+
+            \`\`\`json
+            ${JSON.stringify(state, null, 2)}
+            \`\`\`
+
+            ---
+            *This issue is used to persist workflow state. Do not modify or close manually.*`;
+
+            // Create state issue
+            const stateIssue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[STATE] ${workflowId}`,
+              body: stateBody,
+              labels: ['workflow-state']
+            });
+
+            console.log(`Created state issue #${stateIssue.data.number}`);
+            core.setOutput('state_issue_number', stateIssue.data.number.toString());
+
+      - name: Create Approval Request Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+            const workflowId = '${{ inputs.workflow_id }}';
+
+            const appName = formData.applicationName || formData.appName;
+            const environment = formData.targetEnvironment || formData.environment;
+            const version = formData.versionTag || formData.version;
+            const regions = formData.deploymentRegions || formData.regions || [];
+
+            // Build the approval issue body
+            // Note: This pre-populates the form fields with context
+            const issueBody = `### Workflow Context
+
+            ${workflowId}:1
+
+            ### Original Issue Number
+
+            #${{ inputs.issue_number }}
+
+            ### Deployment Details
+
+            | Field | Value |
+            |-------|-------|
+            | Application | ${appName} |
+            | Version | ${version} |
+            | Environment | ${environment} |
+            | Regions | ${Array.isArray(regions) ? regions.join(', ') : regions || 'default'} |
+            | Replicas | ${formData.numberOfReplicas || formData.replicas || 'default'} |
+            | Rollout Strategy | ${formData.rolloutStrategy || 'rolling'} |
+
+            ### Approval Decision
+
+            _Please select: approved, denied, or needs-changes_
+
+            ### Approver Notes
+
+            _No response_
+
+            ### Pre-Deployment Checklist
+
+            - [ ] I have reviewed the deployment configuration
+            - [ ] I have verified the version/tag is correct
+            - [ ] Rollback plan is documented and ready
+            - [ ] Stakeholders have been notified
+            - [ ] Monitoring and alerting is configured`;
+
+            const approvalIssue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[APPROVAL] ${appName} ${version} to ${environment}`,
+              body: issueBody,
+              labels: ['approval', 'form-submission', 'awaiting-input']
+            });
+
+            console.log(`Created approval request issue #${approvalIssue.data.number}`);
+
+            // Comment on original issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.issue_number }},
+              body: `## Approval Required
+
+            This deployment to **production** requires approval.
+
+            Please complete the approval form: #${approvalIssue.data.number}
+
+            Workflow will resume automatically after approval is submitted.
+
+            | Field | Value |
+            |-------|-------|
+            | Workflow ID | \`${workflowId}\` |
+            | Status | Awaiting Approval |`
+            });
+
+            console.log('=== WORKFLOW PAUSED ===');
+            console.log('Waiting for approval form submission...');
+
+  # ============================================
+  # STEP 1: Process Approval (runs after approval form)
+  # ============================================
+  process-approval:
+    needs: initialize
+    if: inputs.step_number == '1'
+    runs-on: ubuntu-latest
+    outputs:
+      approved: ${{ steps.check-approval.outputs.approved }}
+      decision: ${{ steps.check-approval.outputs.decision }}
+
+    steps:
+      - name: Check Approval Decision
+        id: check-approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+
+            console.log('=== Processing Approval ===');
+
+            // Get approval decision from merged form data
+            const approval = formData._approval || {};
+            const decision = approval.decision || formData.approvalDecision || 'unknown';
+            const notes = approval.notes || formData.approverNotes || '';
+
+            console.log(`Decision: ${decision}`);
+            console.log(`Notes: ${notes}`);
+
+            const approved = decision === 'approved';
+
+            core.setOutput('approved', approved.toString());
+            core.setOutput('decision', decision);
+            core.setOutput('notes', notes);
+
+            return { approved, decision, notes };
+
+      - name: Handle Denial
+        if: steps.check-approval.outputs.approved != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const decision = '${{ steps.check-approval.outputs.decision }}';
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+
+            console.log(`Deployment ${decision}`);
+
+            // Comment on original issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.issue_number }},
+              body: `## Deployment ${decision.charAt(0).toUpperCase() + decision.slice(1)}
+
+            The deployment request has been **${decision}**.
+
+            ${formData._approval?.notes ? `**Approver Notes:**\n${formData._approval.notes}` : ''}
+
+            Workflow ID: \`${{ inputs.workflow_id }}\``
+            });
+
+            core.setFailed(`Deployment ${decision}`);
+
+  # ============================================
+  # DEPLOY: Execute Deployment
+  # ============================================
+  deploy:
+    needs: [initialize, validate, process-approval]
+    # Run if: (step 0 AND validated AND no approval needed) OR (step 1 AND approved)
+    if: |
+      always() &&
+      (
+        (inputs.step_number == '0' && needs.validate.outputs.validation_passed == 'true' && needs.initialize.outputs.requires_approval == 'false') ||
+        (inputs.step_number == '1' && needs.process-approval.outputs.approved == 'true')
+      )
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Execute Deployment
+        id: deploy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+
+            const appName = formData.applicationName || formData.appName;
+            const environment = formData.targetEnvironment || formData.environment;
+            const version = formData.versionTag || formData.version;
+            const regions = formData.deploymentRegions || formData.regions || ['default'];
+            const replicas = formData.numberOfReplicas || formData.replicas || '1';
+            const features = formData.enabledFeatures || formData.features || [];
+            const rolloutStrategy = formData.rolloutStrategy || 'rolling';
+
+            console.log('========================================');
+            console.log('        DEPLOYMENT STARTING');
+            console.log('========================================');
+            console.log(`Application:      ${appName}`);
+            console.log(`Version:          ${version}`);
+            console.log(`Environment:      ${environment}`);
+            console.log(`Regions:          ${Array.isArray(regions) ? regions.join(', ') : regions}`);
+            console.log(`Replicas:         ${replicas}`);
+            console.log(`Rollout Strategy: ${rolloutStrategy}`);
+            console.log(`Features:         ${JSON.stringify(features)}`);
+            console.log('----------------------------------------');
+
+            // Simulate deployment steps
+            const steps = [
+              'Pulling container image...',
+              'Validating configuration...',
+              'Creating deployment manifest...',
+              'Applying to cluster...',
+              'Waiting for rollout...',
+              'Running health checks...',
+              'Deployment complete!'
+            ];
+
+            for (const step of steps) {
+              console.log(`[DEPLOY] ${step}`);
+              await new Promise(r => setTimeout(r, 500)); // Simulate work
+            }
+
+            console.log('========================================');
+            console.log('        DEPLOYMENT SUCCESSFUL');
+            console.log('========================================');
+
+            core.setOutput('status', 'success');
+            core.setOutput('deployed_version', version);
+
+      - name: Post Deployment Summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const formData = JSON.parse(`${{ inputs.form_data }}`);
+            const appName = formData.applicationName || formData.appName;
+            const environment = formData.targetEnvironment || formData.environment;
+            const version = formData.versionTag || formData.version;
+
+            const summary = `## Deployment Successful
+
+            | Field | Value |
+            |-------|-------|
+            | Application | ${appName} |
+            | Version | ${version} |
+            | Environment | ${environment} |
+            | Workflow ID | \`${{ inputs.workflow_id }}\` |
+            | Run ID | \`${{ github.run_id }}\` |
+
+            [View Deployment Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            // Comment on original issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.issue_number }},
+              body: summary
+            });
+
+  # ============================================
+  # CLEANUP: Close State Issue
+  # ============================================
+  cleanup:
+    needs: [deploy, process-approval]
+    if: always() && inputs.state_issue_number != ''
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Close State Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const stateIssueNumber = parseInt('${{ inputs.state_issue_number }}');
+
+            if (stateIssueNumber) {
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: stateIssueNumber,
+                  state: 'closed',
+                  labels: ['workflow-state', 'completed']
+                });
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: stateIssueNumber,
+                  body: `Workflow completed. Final run: ${{ github.run_id }}`
+                });
+
+                console.log(`Closed state issue #${stateIssueNumber}`);
+              } catch (e) {
+                console.log(`Could not close state issue: ${e.message}`);
+              }
+            }

@@ -1,0 +1,245 @@
+name: Workflow State Manager
+
+# Reusable workflow for managing workflow state via GitHub Issues
+# State is stored in issues with the 'workflow-state' label
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - save
+          - load
+          - delete
+          - list
+      workflow_id:
+        description: 'Workflow instance ID'
+        required: true
+        type: string
+      state:
+        description: 'JSON state to save (only for save action)'
+        required: false
+        type: string
+
+  workflow_call:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: string
+      workflow_id:
+        description: 'Workflow instance ID'
+        required: true
+        type: string
+      state:
+        description: 'JSON state to save'
+        required: false
+        type: string
+    outputs:
+      state:
+        description: 'Retrieved state JSON'
+        value: ${{ jobs.manage-state.outputs.state }}
+      issue_number:
+        description: 'State issue number'
+        value: ${{ jobs.manage-state.outputs.issue_number }}
+      found:
+        description: 'Whether state was found'
+        value: ${{ jobs.manage-state.outputs.found }}
+
+jobs:
+  manage-state:
+    runs-on: ubuntu-latest
+    outputs:
+      state: ${{ steps.operation.outputs.state }}
+      issue_number: ${{ steps.operation.outputs.issue_number }}
+      found: ${{ steps.operation.outputs.found }}
+
+    steps:
+      - name: Execute State Operation
+        id: operation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const action = '${{ inputs.action }}';
+            const workflowId = '${{ inputs.workflow_id }}';
+            const stateInput = `${{ inputs.state }}`;
+
+            console.log(`=== State Manager: ${action.toUpperCase()} ===`);
+            console.log(`Workflow ID: ${workflowId}`);
+
+            // Find existing state issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'workflow-state',
+              state: 'open',
+              per_page: 100
+            });
+
+            const stateIssue = issues.data.find(i =>
+              i.title.includes(workflowId)
+            );
+
+            switch (action) {
+              case 'save': {
+                let stateData;
+                try {
+                  stateData = JSON.parse(stateInput);
+                } catch (e) {
+                  stateData = { raw: stateInput };
+                }
+
+                const stateBody = `## Workflow State
+
+            **Workflow ID:** \`${workflowId}\`
+            **Last Updated:** ${new Date().toISOString()}
+            **Status:** ${stateData.status || 'active'}
+
+            \`\`\`json
+            ${JSON.stringify(stateData, null, 2)}
+            \`\`\`
+
+            ---
+            *Managed by state-manager workflow. Do not modify manually.*`;
+
+                if (stateIssue) {
+                  // Update existing
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: stateIssue.number,
+                    body: stateBody
+                  });
+                  console.log(`Updated state issue #${stateIssue.number}`);
+                  core.setOutput('issue_number', stateIssue.number.toString());
+                } else {
+                  // Create new
+                  const newIssue = await github.rest.issues.create({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    title: `[STATE] ${workflowId}`,
+                    body: stateBody,
+                    labels: ['workflow-state']
+                  });
+                  console.log(`Created state issue #${newIssue.data.number}`);
+                  core.setOutput('issue_number', newIssue.data.number.toString());
+                }
+                core.setOutput('found', 'true');
+                core.setOutput('state', stateInput);
+                break;
+              }
+
+              case 'load': {
+                if (stateIssue) {
+                  const match = stateIssue.body.match(/```json\n([\s\S]*?)\n```/);
+                  if (match) {
+                    console.log('State found and loaded');
+                    core.setOutput('state', match[1]);
+                    core.setOutput('issue_number', stateIssue.number.toString());
+                    core.setOutput('found', 'true');
+                  } else {
+                    console.log('State issue found but no JSON block');
+                    core.setOutput('state', '{}');
+                    core.setOutput('issue_number', stateIssue.number.toString());
+                    core.setOutput('found', 'false');
+                  }
+                } else {
+                  console.log('No state found');
+                  core.setOutput('state', '{}');
+                  core.setOutput('issue_number', '');
+                  core.setOutput('found', 'false');
+                }
+                break;
+              }
+
+              case 'delete': {
+                if (stateIssue) {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: stateIssue.number,
+                    state: 'closed'
+                  });
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: stateIssue.number,
+                    labels: ['completed']
+                  });
+                  console.log(`Closed state issue #${stateIssue.number}`);
+                  core.setOutput('issue_number', stateIssue.number.toString());
+                  core.setOutput('found', 'true');
+                } else {
+                  console.log('No state to delete');
+                  core.setOutput('issue_number', '');
+                  core.setOutput('found', 'false');
+                }
+                core.setOutput('state', '{}');
+                break;
+              }
+
+              case 'list': {
+                console.log(`Found ${issues.data.length} active state issues:`);
+                const stateList = issues.data.map(i => ({
+                  number: i.number,
+                  title: i.title,
+                  created: i.created_at,
+                  url: i.html_url
+                }));
+                for (const s of stateList) {
+                  console.log(`  #${s.number}: ${s.title}`);
+                }
+                core.setOutput('state', JSON.stringify(stateList));
+                core.setOutput('found', issues.data.length > 0 ? 'true' : 'false');
+                break;
+              }
+
+              default:
+                core.setFailed(`Unknown action: ${action}`);
+            }
+
+  # Cleanup stale state issues (optional scheduled job)
+  cleanup-stale:
+    runs-on: ubuntu-latest
+    if: inputs.action == 'cleanup'
+    steps:
+      - name: Find and Close Stale State Issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const maxAgeHours = 72; // Close state issues older than 72 hours
+            const cutoffDate = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000);
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'workflow-state',
+              state: 'open',
+              per_page: 100
+            });
+
+            let closedCount = 0;
+            for (const issue of issues.data) {
+              const createdAt = new Date(issue.created_at);
+              if (createdAt < cutoffDate) {
+                console.log(`Closing stale state issue #${issue.number} (created ${issue.created_at})`);
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed'
+                });
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['stale', 'auto-closed']
+                });
+                closedCount++;
+              }
+            }
+
+            console.log(`Closed ${closedCount} stale state issues`);

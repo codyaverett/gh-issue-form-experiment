@@ -1,0 +1,21 @@
+{
+  "name": "gh-issue-form-experiment",
+  "version": "0.1.0",
+  "description": "GitHub Issue Forms Workflow Framework - Bypass 10-input limit with Concord-like pause/resume",
+  "private": true,
+  "scripts": {
+    "parse": "node .github/scripts/parse-issue-form.js",
+    "test:parse": "echo '### Application Name\n\nmy-service\n\n### Target Environment\n\nproduction' | node .github/scripts/parse-issue-form.js"
+  },
+  "keywords": [
+    "github-actions",
+    "issue-forms",
+    "workflow",
+    "concord"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

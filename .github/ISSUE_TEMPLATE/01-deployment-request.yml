@@ -1,0 +1,218 @@
+name: Deployment Request
+description: Request a new deployment with full configuration (16+ fields demo)
+title: "[DEPLOY] "
+labels: ["deployment", "form-submission"]
+body:
+  # Internal workflow context (for resume functionality)
+  - type: input
+    id: workflow_context
+    attributes:
+      label: Workflow Context
+      description: "Internal use only - leave empty for new requests"
+      placeholder: "auto-populated on resume"
+    validations:
+      required: false
+
+  # Section: Basic Information
+  - type: markdown
+    attributes:
+      value: |
+        ## Basic Information
+        Core details about what you're deploying.
+
+  - type: input
+    id: app_name
+    attributes:
+      label: Application Name
+      description: Name of the application to deploy
+      placeholder: "my-service"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Target Environment
+      description: Which environment to deploy to (production requires approval)
+      options:
+        - development
+        - staging
+        - production
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version/Tag
+      description: Version number, git tag, or commit SHA to deploy
+      placeholder: "v1.2.3 or abc123f"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regions
+    attributes:
+      label: Deployment Region(s)
+      description: Select one or more regions
+      multiple: true
+      options:
+        - us-east-1
+        - us-west-2
+        - eu-west-1
+        - eu-central-1
+        - ap-southeast-1
+        - ap-northeast-1
+    validations:
+      required: false
+
+  # Section: Resource Configuration
+  - type: markdown
+    attributes:
+      value: |
+        ## Resource Configuration
+        Configure compute resources for your deployment.
+
+  - type: input
+    id: replicas
+    attributes:
+      label: Number of Replicas
+      description: How many instances to run
+      placeholder: "3"
+    validations:
+      required: false
+
+  - type: input
+    id: cpu_limit
+    attributes:
+      label: CPU Limit
+      description: Maximum CPU allocation (Kubernetes format)
+      placeholder: "500m"
+    validations:
+      required: false
+
+  - type: input
+    id: memory_limit
+    attributes:
+      label: Memory Limit
+      description: Maximum memory allocation (Kubernetes format)
+      placeholder: "512Mi"
+    validations:
+      required: false
+
+  - type: textarea
+    id: env_vars
+    attributes:
+      label: Environment Variables
+      description: "KEY=value format, one per line"
+      placeholder: |
+        NODE_ENV=production
+        LOG_LEVEL=info
+        API_TIMEOUT=30000
+      render: shell
+    validations:
+      required: false
+
+  # Section: Health Checks
+  - type: markdown
+    attributes:
+      value: |
+        ## Health Check Configuration
+        Configure how the system monitors your application's health.
+
+  - type: dropdown
+    id: health_check_type
+    attributes:
+      label: Health Check Type
+      description: Type of health check to perform
+      options:
+        - http
+        - tcp
+        - exec
+        - none
+    validations:
+      required: false
+
+  - type: input
+    id: health_check_path
+    attributes:
+      label: Health Check Path
+      description: HTTP path for health checks (if using http type)
+      placeholder: "/health"
+    validations:
+      required: false
+
+  # Section: Features
+  - type: markdown
+    attributes:
+      value: |
+        ## Features
+        Enable optional features for your deployment.
+
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Enabled Features
+      description: Select features to enable
+      options:
+        - label: Enable autoscaling (HPA)
+        - label: Enable structured logging
+        - label: Enable Prometheus metrics
+        - label: Enable distributed tracing
+        - label: Enable service mesh (Istio)
+
+  # Section: Deployment Strategy
+  - type: markdown
+    attributes:
+      value: |
+        ## Deployment Strategy
+        Configure how the deployment should be rolled out.
+
+  - type: dropdown
+    id: rollout_strategy
+    attributes:
+      label: Rollout Strategy
+      description: How to roll out the new version
+      options:
+        - rolling
+        - blue-green
+        - canary
+    validations:
+      required: false
+
+  - type: input
+    id: canary_percentage
+    attributes:
+      label: Canary Percentage
+      description: Percentage of traffic for canary (if using canary strategy)
+      placeholder: "10"
+    validations:
+      required: false
+
+  # Section: Advanced Configuration
+  - type: markdown
+    attributes:
+      value: |
+        ## Advanced Configuration
+        Additional configuration options.
+
+  - type: textarea
+    id: custom_annotations
+    attributes:
+      label: Custom Annotations
+      description: "Additional Kubernetes annotations (YAML format)"
+      placeholder: |
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+      render: yaml
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes
+      description: Any additional information about this deployment
+      placeholder: "Deployment notes, context, or special instructions..."
+    validations:
+      required: false

@@ -1,0 +1,269 @@
+name: Issue Form Handler
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  parse-and-route:
+    runs-on: ubuntu-latest
+    # Only process issues with the form-submission label
+    if: contains(github.event.issue.labels.*.name, 'form-submission')
+
+    outputs:
+      form_data: ${{ steps.parse.outputs.form_data }}
+      form_type: ${{ steps.parse.outputs.form_type }}
+      workflow_id: ${{ steps.parse.outputs.workflow_id }}
+      step_number: ${{ steps.parse.outputs.step_number }}
+      is_valid: ${{ steps.parse.outputs.is_valid }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Parse Issue Form Body
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            // Load the parser module
+            const parserPath = path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/parse-issue-form.js');
+            const parser = require(parserPath);
+
+            // Get issue data
+            const body = context.payload.issue.body;
+            const labels = context.payload.issue.labels.map(l => l.name);
+            const issueNumber = context.payload.issue.number;
+
+            console.log('=== Parsing Issue Form ===');
+            console.log(`Issue #${issueNumber}`);
+            console.log(`Labels: ${labels.join(', ')}`);
+
+            // Parse the form body
+            const formData = parser.parseIssueBody(body);
+            console.log('\n=== Parsed Form Data ===');
+            console.log(JSON.stringify(formData, null, 2));
+
+            // Determine form type
+            const formType = parser.determineFormType(labels, formData);
+            console.log(`\nForm Type: ${formType}`);
+
+            // Extract workflow context (for resume scenarios)
+            const workflowContext = parser.extractWorkflowContext(formData);
+            console.log(`Workflow Context: ${JSON.stringify(workflowContext)}`);
+
+            // Validate the form data
+            const validation = parser.validateFormData(formType, formData);
+            console.log(`Validation: ${validation.isValid ? 'PASSED' : 'FAILED'}`);
+            if (!validation.isValid) {
+              console.log(`Errors: ${validation.errors.join(', ')}`);
+            }
+
+            // Generate workflow ID if this is a new workflow
+            let workflowId = workflowContext.workflowId;
+            if (!workflowId) {
+              workflowId = `wf-${context.runId}-${Date.now()}`;
+              console.log(`Generated new workflow ID: ${workflowId}`);
+            }
+
+            // Serialize form data for workflow dispatch
+            const serializedData = parser.serializeForWorkflow(formData);
+
+            // Set outputs
+            core.setOutput('form_data', serializedData);
+            core.setOutput('form_type', formType);
+            core.setOutput('workflow_id', workflowId);
+            core.setOutput('step_number', workflowContext.stepNumber.toString());
+            core.setOutput('is_valid', validation.isValid.toString());
+            core.setOutput('validation_errors', JSON.stringify(validation.errors));
+
+            return {
+              formData,
+              formType,
+              workflowId,
+              stepNumber: workflowContext.stepNumber,
+              isValid: validation.isValid
+            };
+
+      - name: Store Form Data as Artifact
+        run: |
+          mkdir -p workflow-data
+          echo '${{ steps.parse.outputs.form_data }}' > workflow-data/form-data.json
+          echo '${{ steps.parse.outputs.form_type }}' > workflow-data/form-type.txt
+          echo '${{ steps.parse.outputs.workflow_id }}' > workflow-data/workflow-id.txt
+
+      - name: Upload Form Data Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: form-data-${{ github.event.issue.number }}
+          path: workflow-data/
+          retention-days: 30
+
+      - name: Add Processing Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isValid = '${{ steps.parse.outputs.is_valid }}' === 'true';
+            const formType = '${{ steps.parse.outputs.form_type }}';
+            const workflowId = '${{ steps.parse.outputs.workflow_id }}';
+            const stepNumber = '${{ steps.parse.outputs.step_number }}';
+
+            let commentBody = '';
+
+            if (isValid) {
+              commentBody = `## Form Submitted Successfully
+
+            | Field | Value |
+            |-------|-------|
+            | Workflow ID | \`${workflowId}\` |
+            | Form Type | \`${formType}\` |
+            | Step | \`${stepNumber}\` |
+            | Run ID | \`${context.runId}\` |
+
+            Your form has been processed and the workflow is now executing.
+
+            [View Workflow Run](${context.payload.repository.html_url}/actions/runs/${context.runId})`;
+            } else {
+              const errors = JSON.parse('${{ steps.parse.outputs.validation_errors }}' || '[]');
+              commentBody = `## Form Validation Failed
+
+            The following errors were found:
+
+            ${errors.map(e => `- ${e}`).join('\n')}
+
+            Please create a new issue with the corrected information.`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+      - name: Close Issue
+        if: steps.parse.outputs.is_valid == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const currentLabels = context.payload.issue.labels.map(l => l.name);
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              labels: [...currentLabels, 'processed']
+            });
+
+  # Trigger deployment workflow for deployment forms
+  trigger-deployment:
+    needs: parse-and-route
+    if: needs.parse-and-route.outputs.is_valid == 'true' && needs.parse-and-route.outputs.form_type == 'deployment'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Deployment Orchestrator
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log('Triggering deployment orchestrator...');
+            console.log(`Form Data Length: ${('${{ needs.parse-and-route.outputs.form_data }}').length}`);
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'deployment-orchestrator.yml',
+              ref: 'main',
+              inputs: {
+                form_data: '${{ needs.parse-and-route.outputs.form_data }}',
+                issue_number: context.issue.number.toString(),
+                workflow_id: '${{ needs.parse-and-route.outputs.workflow_id }}',
+                step_number: '${{ needs.parse-and-route.outputs.step_number }}'
+              }
+            });
+
+            console.log('Deployment orchestrator triggered successfully');
+
+  # Trigger approval processing for approval forms
+  trigger-approval:
+    needs: parse-and-route
+    if: needs.parse-and-route.outputs.is_valid == 'true' && needs.parse-and-route.outputs.form_type == 'approval'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Load Existing State
+        id: load-state
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowId = '${{ needs.parse-and-route.outputs.workflow_id }}';
+
+            // Find the state issue for this workflow
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'workflow-state',
+              state: 'open'
+            });
+
+            const stateIssue = issues.data.find(i =>
+              i.title.includes(workflowId)
+            );
+
+            if (stateIssue) {
+              // Extract state from issue body
+              const match = stateIssue.body.match(/```json\n([\s\S]*?)\n```/);
+              if (match) {
+                console.log('Found existing state');
+                core.setOutput('state', match[1]);
+                core.setOutput('state_issue_number', stateIssue.number.toString());
+                return;
+              }
+            }
+
+            console.log('No existing state found');
+            core.setOutput('state', '{}');
+            core.setOutput('state_issue_number', '');
+
+      - name: Trigger Deployment Orchestrator (Resume)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Merge approval form data with existing state
+            const approvalData = JSON.parse('${{ needs.parse-and-route.outputs.form_data }}');
+            const existingState = JSON.parse('${{ steps.load-state.outputs.state }}' || '{}');
+
+            const mergedData = {
+              ...existingState.formData,
+              ...approvalData,
+              _approval: {
+                decision: approvalData.approvalDecision,
+                notes: approvalData.approverNotes,
+                checklist: approvalData.preDeploymentChecklist || approvalData.approvalChecklist
+              }
+            };
+
+            console.log('Triggering orchestrator with merged data...');
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'deployment-orchestrator.yml',
+              ref: 'main',
+              inputs: {
+                form_data: JSON.stringify(mergedData),
+                issue_number: context.issue.number.toString(),
+                workflow_id: '${{ needs.parse-and-route.outputs.workflow_id }}',
+                step_number: '${{ needs.parse-and-route.outputs.step_number }}',
+                state_issue_number: '${{ steps.load-state.outputs.state_issue_number }}'
+              }
+            });
+
+            console.log('Orchestrator resumed successfully');

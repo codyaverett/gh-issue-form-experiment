@@ -1,0 +1,89 @@
+name: Deployment Approval
+description: Approve or deny a production deployment request
+title: "[APPROVAL] "
+labels: ["approval", "form-submission", "awaiting-input"]
+body:
+  # Workflow context (pre-populated by orchestrator)
+  - type: input
+    id: workflow_context
+    attributes:
+      label: Workflow Context
+      description: "Internal use - contains workflow ID and step number"
+      placeholder: "wf-123456:1"
+    validations:
+      required: true
+
+  - type: input
+    id: original_issue
+    attributes:
+      label: Original Issue Number
+      description: "Reference to the original deployment request issue"
+      placeholder: "#42"
+    validations:
+      required: false
+
+  # Deployment Summary (pre-populated, read-only context)
+  - type: markdown
+    attributes:
+      value: |
+        ## Deployment Summary
+        Review the deployment details below before making your decision.
+
+  - type: textarea
+    id: deployment_summary
+    attributes:
+      label: Deployment Details
+      description: "Summary of the deployment request (auto-populated)"
+      placeholder: |
+        Application: my-service
+        Version: v1.2.3
+        Environment: production
+        Regions: us-east-1, eu-west-1
+        Replicas: 3
+      render: markdown
+    validations:
+      required: false
+
+  # Approval Decision
+  - type: markdown
+    attributes:
+      value: |
+        ## Your Decision
+        Please review the deployment details and provide your approval decision.
+
+  - type: dropdown
+    id: approval_decision
+    attributes:
+      label: Approval Decision
+      description: Approve or deny this deployment
+      options:
+        - approved
+        - denied
+        - needs-changes
+    validations:
+      required: true
+
+  - type: textarea
+    id: approver_notes
+    attributes:
+      label: Approver Notes
+      description: Provide any notes, conditions, or reasons for your decision
+      placeholder: |
+        - Approved for deployment during maintenance window
+        - Please ensure rollback plan is ready
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: approval_checklist
+    attributes:
+      label: Pre-Deployment Checklist
+      description: Confirm the following before approving
+      options:
+        - label: I have reviewed the deployment configuration
+          required: true
+        - label: I have verified the version/tag is correct
+          required: true
+        - label: Rollback plan is documented and ready
+        - label: Stakeholders have been notified
+        - label: Monitoring and alerting is configured
