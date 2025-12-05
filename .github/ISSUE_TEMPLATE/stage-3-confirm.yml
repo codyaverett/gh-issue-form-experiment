@@ -1,0 +1,48 @@
+name: "Stage 3: Review & Confirm"
+description: "Step 3 of 3 - Review and confirm your project configuration"
+title: "[PROJECT-S3] "
+labels: ["form-submission", "stage-3", "wizard"]
+body:
+  - type: input
+    id: stage1_issue
+    attributes:
+      label: Stage 1 Issue Reference
+      description: "Reference to your Stage 1 project info issue (auto-populated from link)"
+      placeholder: "#123"
+    validations:
+      required: true
+
+  - type: input
+    id: stage2_issue
+    attributes:
+      label: Stage 2 Issue Reference
+      description: "Reference to your Stage 2 technical config issue (auto-populated from link)"
+      placeholder: "#124"
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Step 3 of 3: Review & Confirm
+        Please review your selections from previous stages and confirm.
+
+  - type: dropdown
+    id: confirmation
+    attributes:
+      label: Confirmation
+      description: Do you want to proceed with this configuration?
+      options:
+        - "Yes, proceed with project creation"
+        - "No, cancel this request"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: Additional Notes
+      description: Any special instructions or notes for the project setup
+      placeholder: "Any additional context..."
+    validations:
+      required: false

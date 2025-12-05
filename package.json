@@ -1,6 +1,6 @@
 {
   "name": "gh-issue-form-experiment",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "GitHub Issue Forms Workflow Framework - Bypass 10-input limit with Concord-like pause/resume",
   "private": true,
   "scripts": {

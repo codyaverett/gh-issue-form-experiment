@@ -1,10 +1,8 @@
-name: Three-Stage Wizard Flow (Single Issue)
+name: Multi-Issue Wizard Flow
 
 on:
   issues:
     types: [opened]
-  issue_comment:
-    types: [created]
 
 permissions:
   issues: write
@@ -56,67 +54,51 @@ jobs:
             core.setOutput('form_data', JSON.stringify(formData));
             return formData;
 
-      - name: Post Stage 2 Template & Update Labels
+      - name: Generate Stage 2 URL & Post Comment
         uses: actions/github-script@v7
+        env:
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
         with:
           script: |
-            const formData = JSON.parse('${{ steps.parse.outputs.form_data }}');
+            const formData = ${{ steps.parse.outputs.form_data }};
             const repo = context.repo;
             const issueNumber = context.issue.number;
+            const runId = process.env.WORKFLOW_RUN_ID;
 
-            // Post Stage 2 comment template
-            const stage2Template = `## ✅ Stage 1 Complete!
+            // Generate pre-filled Stage 2 URL
+            const stage2Url = 'https://github.com/' + repo.owner + '/' + repo.repo + '/issues/new?template=stage-2-technical-config.yml&stage1_issue=%23' + issueNumber;
 
-            **Project:** ${formData.projectName || 'N/A'}
-            **Type:** ${formData.projectType || 'N/A'}
-            **Team Size:** ${formData.teamSize || 'N/A'}
-            **Owner:** ${formData.projectOwnerEmail || 'N/A'}
-
-            ---
-
-            ## 📝 Stage 2: Technical Configuration
-
-            **Please reply to this issue** with your technical choices. Copy the template below and fill it in:
-
-            \`\`\`
-            **Language:** TypeScript
-            **Framework:** React
-            **Environment:** Dev + Staging + Production
-
-            **Features:**
-            - Database (PostgreSQL/MySQL)
-            - Authentication
-            - CI/CD Pipeline
-            \`\`\`
-
-            ### Available Options:
-
-            | Field | Options |
-            |-------|---------|
-            | Language | TypeScript, JavaScript, Python, Go, Rust, Java |
-            | Framework | React, Vue, Next.js, Express, FastAPI, Django, None |
-            | Environment | Development Only, Dev + Staging, Dev + Staging + Production |
-
-            **Features** (list the ones you need):
-            - Database (PostgreSQL/MySQL)
-            - Redis Cache
-            - Message Queue
-            - File Storage (S3)
-            - Authentication
-            - CI/CD Pipeline`;
+            // Post Stage 2 link comment
+            const comment = [
+              '## Stage 1 Complete!',
+              '',
+              '**Project:** ' + (formData.projectName || 'N/A'),
+              '**Type:** ' + (formData.projectType || 'N/A'),
+              '**Team Size:** ' + (formData.teamSize || 'N/A'),
+              '**Owner:** ' + (formData.projectOwnerEmail || formData.ownerEmail || 'N/A'),
+              '',
+              '---',
+              '',
+              '## Next Step: Stage 2 - Technical Configuration',
+              '',
+              'Click the link below to continue to Stage 2. Your Stage 1 reference will be automatically filled in.',
+              '',
+              '**[Continue to Stage 2](' + stage2Url + ')**',
+              '',
+              '---',
+              '*Workflow Run: `' + runId + '`*'
+            ].join('\n');
 
             await github.rest.issues.createComment({
               owner: repo.owner,
               repo: repo.repo,
               issue_number: issueNumber,
-              body: stage2Template
+              body: comment
             });
 
-            // Update labels: remove stage-1, add awaiting-stage-2
+            // Update labels: add awaiting-stage-2
             const currentLabels = context.payload.issue.labels.map(l => l.name);
-            const newLabels = currentLabels
-              .filter(l => l !== 'stage-1')
-              .concat(['awaiting-stage-2']);
+            const newLabels = [...new Set([...currentLabels, 'awaiting-stage-2'])];
 
             await github.rest.issues.setLabels({
               owner: repo.owner,
@@ -125,114 +107,232 @@ jobs:
               labels: newLabels
             });
 
-            console.log('Stage 1 complete, awaiting Stage 2 input');
+            console.log('Stage 1 complete, posted Stage 2 link');
 
   # ============================================
-  # Stage 2: Process comment with technical config
+  # Stage 2: Process technical configuration
   # ============================================
   process-stage-2:
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'issue_comment' &&
-      contains(join(github.event.issue.labels.*.name, ','), 'awaiting-stage-2') &&
-      github.event.comment.user.login != 'github-actions[bot]'
+      github.event_name == 'issues' &&
+      contains(join(github.event.issue.labels.*.name, ','), 'wizard') &&
+      contains(join(github.event.issue.labels.*.name, ','), 'stage-2')
 
     steps:
-      - name: Parse Stage 2 Comment
+      - name: Parse Stage 2 Form
         id: parse
         uses: actions/github-script@v7
         with:
           script: |
-            const comment = context.payload.comment.body;
-            console.log('Parsing Stage 2 comment...');
-            console.log('Raw comment:', comment);
+            const body = context.payload.issue.body;
+            console.log('Parsing Stage 2 form...');
 
-            // Parse **Field:** Value format
+            // Parse form body (### Header\n\nValue format)
             const formData = {};
+            const sections = body.split(/^### /gm).filter(Boolean);
 
-            // Extract simple fields
-            const fieldPattern = /\*\*(\w+):\*\*\s*(.+)/g;
-            let match;
-            while ((match = fieldPattern.exec(comment)) !== null) {
-              const key = match[1].toLowerCase();
-              const value = match[2].trim();
-              formData[key] = value;
-            }
+            for (const section of sections) {
+              const lines = section.split('\n');
+              const header = lines[0].trim();
+              const content = lines.slice(1).join('\n').trim();
 
-            // Extract features list
-            const featuresMatch = comment.match(/\*\*Features:\*\*\s*([\s\S]*?)(?=\*\*|$)/);
-            if (featuresMatch) {
-              const featuresText = featuresMatch[1];
-              const features = featuresText
-                .split('\n')
-                .map(l => l.replace(/^-\s*/, '').trim())
-                .filter(l => l.length > 0);
-              formData.features = features;
+              const key = header
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, '')
+                .trim()
+                .replace(/\s+(.)/g, (_, c) => c.toUpperCase());
+
+              if (!content || content === '_No response_') {
+                formData[key] = null;
+              } else {
+                // Handle checkboxes (features)
+                if (content.includes('- [')) {
+                  const features = [];
+                  const checkboxPattern = /- \[(X| )\] (.+)/g;
+                  let match;
+                  while ((match = checkboxPattern.exec(content)) !== null) {
+                    if (match[1] === 'X') {
+                      features.push(match[2].trim());
+                    }
+                  }
+                  formData[key] = features;
+                } else {
+                  formData[key] = content;
+                }
+              }
             }
 
             console.log('Stage 2 data:', JSON.stringify(formData, null, 2));
             core.setOutput('form_data', JSON.stringify(formData));
+
+            // Extract Stage 1 issue number
+            const stage1Ref = formData.stage1IssueReference || formData.stage1Issue || '';
+            const stage1Num = parseInt(stage1Ref.replace('#', ''));
+            core.setOutput('stage1_num', isNaN(stage1Num) ? '' : stage1Num.toString());
+
             return formData;
 
-      - name: Post Stage 3 Template & Update Labels
+      - name: Fetch Stage 1 Data
+        id: stage1
         uses: actions/github-script@v7
+        env:
+          STAGE1_NUM: ${{ steps.parse.outputs.stage1_num }}
         with:
           script: |
-            const formData = JSON.parse('${{ steps.parse.outputs.form_data }}');
+            const stage1Num = process.env.STAGE1_NUM;
+            if (!stage1Num) {
+              console.log('No Stage 1 reference found');
+              core.setOutput('data', '{}');
+              return {};
+            }
+
             const repo = context.repo;
-            const issueNumber = context.issue.number;
+            const issue = await github.rest.issues.get({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: parseInt(stage1Num)
+            });
 
-            const featuresList = (formData.features || []).map(f => `- ${f}`).join('\n') || '- None specified';
+            // Parse Stage 1 body
+            const body = issue.data.body;
+            const formData = {};
+            const sections = body.split(/^### /gm).filter(Boolean);
 
-            // Post Stage 3 comment template
-            const stage3Template = `## ✅ Stage 2 Complete!
+            for (const section of sections) {
+              const lines = section.split('\n');
+              const header = lines[0].trim();
+              const content = lines.slice(1).join('\n').trim();
+              const key = header.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+(.)/g, (_, c) => c.toUpperCase());
+              if (content && content !== '_No response_') {
+                formData[key] = content;
+              }
+            }
 
-            **Language:** ${formData.language || 'N/A'}
-            **Framework:** ${formData.framework || 'N/A'}
-            **Environment:** ${formData.environment || 'N/A'}
+            console.log('Stage 1 data:', JSON.stringify(formData, null, 2));
+            core.setOutput('data', JSON.stringify(formData));
+            return formData;
 
-            **Features:**
-            ${featuresList}
+      - name: Close Stage 1 Issue
+        uses: actions/github-script@v7
+        env:
+          STAGE1_NUM: ${{ steps.parse.outputs.stage1_num }}
+        with:
+          script: |
+            const stage1Num = process.env.STAGE1_NUM;
+            if (!stage1Num) {
+              console.log('No Stage 1 to close');
+              return;
+            }
 
-            ---
+            const repo = context.repo;
+            const stage2Num = context.issue.number;
 
-            ## 📝 Stage 3: Review & Confirm
-
-            Please review all your selections above and **reply to confirm**.
-
-            Copy and fill in:
-
-            \`\`\`
-            **Confirmation:** Yes, proceed
-            **Additional Notes:** Any special instructions or notes
-            \`\`\`
-
-            | Confirmation Options |
-            |---------------------|
-            | Yes, proceed |
-            | No, cancel |`;
+            // Post closing comment on Stage 1
+            const closeComment = [
+              '## Stage 1 Completed',
+              '',
+              'Stage 2 has been submitted. This issue is now closed.',
+              '',
+              '**Continue to:** #' + stage2Num,
+              '',
+              '---',
+              '*Closed by Stage 2 submission*'
+            ].join('\n');
 
             await github.rest.issues.createComment({
               owner: repo.owner,
               repo: repo.repo,
-              issue_number: issueNumber,
-              body: stage3Template
+              issue_number: parseInt(stage1Num),
+              body: closeComment
             });
 
-            // Update labels: remove awaiting-stage-2, add awaiting-stage-3
+            // Update labels and close Stage 1
+            await github.rest.issues.update({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: parseInt(stage1Num),
+              state: 'closed',
+              labels: ['wizard', 'stage-1', 'form-submission', 'completed']
+            });
+
+            console.log('Closed Stage 1 issue #' + stage1Num);
+
+      - name: Generate Stage 3 URL & Post Comment
+        uses: actions/github-script@v7
+        env:
+          STAGE1_NUM: ${{ steps.parse.outputs.stage1_num }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        with:
+          script: |
+            const stage2Data = ${{ steps.parse.outputs.form_data }};
+            const stage1Data = ${{ steps.stage1.outputs.data }};
+            const stage1Num = process.env.STAGE1_NUM;
+            const runId = process.env.WORKFLOW_RUN_ID;
+            const repo = context.repo;
+            const stage2Num = context.issue.number;
+
+            // Generate pre-filled Stage 3 URL
+            const stage3Url = 'https://github.com/' + repo.owner + '/' + repo.repo + '/issues/new?template=stage-3-confirm.yml&stage1_issue=%23' + stage1Num + '&stage2_issue=%23' + stage2Num;
+
+            // Format features
+            const features = stage2Data.requiredFeatures || stage2Data.features || [];
+            const featuresList = Array.isArray(features) && features.length > 0
+              ? features.map(f => '- ' + f).join('\n')
+              : '- None selected';
+
+            // Post Stage 3 link comment
+            const comment = [
+              '## Stage 2 Complete!',
+              '',
+              '### Stage 1 Summary',
+              '**Project:** ' + (stage1Data.projectName || 'N/A'),
+              '**Type:** ' + (stage1Data.projectType || 'N/A'),
+              '**Team Size:** ' + (stage1Data.teamSize || 'N/A'),
+              '',
+              '### Stage 2 Summary',
+              '**Language:** ' + (stage2Data.primaryLanguage || stage2Data.language || 'N/A'),
+              '**Framework:** ' + (stage2Data.framework || 'N/A'),
+              '**Environment:** ' + (stage2Data.targetEnvironments || stage2Data.environment || 'N/A'),
+              '',
+              '**Features:**',
+              featuresList,
+              '',
+              '---',
+              '',
+              '## Next Step: Stage 3 - Review & Confirm',
+              '',
+              'Click the link below to review all your selections and confirm.',
+              '',
+              '**[Continue to Stage 3](' + stage3Url + ')**',
+              '',
+              '### Related Issues',
+              '- Stage 1: #' + stage1Num + ' (closed)',
+              '- Stage 2: #' + stage2Num + ' (current)',
+              '',
+              '---',
+              '*Workflow Run: `' + runId + '`*'
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: stage2Num,
+              body: comment
+            });
+
+            // Update labels: add awaiting-stage-3
             const currentLabels = context.payload.issue.labels.map(l => l.name);
-            const newLabels = currentLabels
-              .filter(l => l !== 'awaiting-stage-2')
-              .concat(['awaiting-stage-3']);
+            const newLabels = [...new Set([...currentLabels, 'awaiting-stage-3'])];
 
             await github.rest.issues.setLabels({
               owner: repo.owner,
               repo: repo.repo,
-              issue_number: issueNumber,
+              issue_number: stage2Num,
               labels: newLabels
             });
 
-            console.log('Stage 2 complete, awaiting Stage 3 input');
+            console.log('Stage 2 complete, posted Stage 3 link');
 
   # ============================================
   # Stage 3: Process confirmation and complete
@@ -240,167 +340,324 @@ jobs:
   process-stage-3:
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'issue_comment' &&
-      contains(join(github.event.issue.labels.*.name, ','), 'awaiting-stage-3') &&
-      github.event.comment.user.login != 'github-actions[bot]'
+      github.event_name == 'issues' &&
+      contains(join(github.event.issue.labels.*.name, ','), 'wizard') &&
+      contains(join(github.event.issue.labels.*.name, ','), 'stage-3')
 
     steps:
-      - name: Parse Stage 3 Comment
+      - name: Parse Stage 3 Form
         id: parse
         uses: actions/github-script@v7
         with:
           script: |
-            const comment = context.payload.comment.body;
-            console.log('Parsing Stage 3 comment...');
+            const body = context.payload.issue.body;
+            console.log('Parsing Stage 3 form...');
 
+            // Parse form body
             const formData = {};
-
-            // Extract confirmation
-            const confirmMatch = comment.match(/\*\*Confirmation:\*\*\s*(.+)/i);
-            if (confirmMatch) {
-              formData.confirmation = confirmMatch[1].trim();
-            }
-
-            // Extract notes
-            const notesMatch = comment.match(/\*\*Additional Notes:\*\*\s*(.+)/i);
-            if (notesMatch) {
-              formData.notes = notesMatch[1].trim();
-            }
-
-            console.log('Stage 3 data:', JSON.stringify(formData, null, 2));
-            core.setOutput('form_data', JSON.stringify(formData));
-            core.setOutput('confirmed', (formData.confirmation || '').toLowerCase().includes('yes') ? 'true' : 'false');
-            return formData;
-
-      - name: Load All Stage Data from Comments
-        id: load-all
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const repo = context.repo;
-            const issueNumber = context.issue.number;
-
-            // Get issue body (Stage 1 data)
-            const issue = await github.rest.issues.get({
-              owner: repo.owner,
-              repo: repo.repo,
-              issue_number: issueNumber
-            });
-
-            // Parse Stage 1 from issue body
-            const body = issue.data.body;
-            const stage1 = {};
             const sections = body.split(/^### /gm).filter(Boolean);
+
             for (const section of sections) {
               const lines = section.split('\n');
               const header = lines[0].trim();
               const content = lines.slice(1).join('\n').trim();
               const key = header.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+(.)/g, (_, c) => c.toUpperCase());
               if (content && content !== '_No response_') {
-                stage1[key] = content;
+                formData[key] = content;
               }
             }
 
-            // Get all comments to find Stage 2 user response
-            const comments = await github.rest.issues.listComments({
-              owner: repo.owner,
-              repo: repo.repo,
-              issue_number: issueNumber
-            });
+            console.log('Stage 3 data:', JSON.stringify(formData, null, 2));
+            core.setOutput('form_data', JSON.stringify(formData));
 
-            // Find user comments (not bot)
-            const userComments = comments.data.filter(c => !c.user.login.includes('[bot]'));
+            // Extract issue references
+            const stage1Ref = formData.stage1IssueReference || formData.stage1Issue || '';
+            const stage2Ref = formData.stage2IssueReference || formData.stage2Issue || '';
+            const stage1Num = parseInt(stage1Ref.replace('#', ''));
+            const stage2Num = parseInt(stage2Ref.replace('#', ''));
 
-            // Parse Stage 2 from first user comment after Stage 1
-            let stage2 = {};
-            if (userComments.length >= 1) {
-              const s2Comment = userComments[0].body;
-              const fieldPattern = /\*\*(\w+):\*\*\s*(.+)/g;
-              let match;
-              while ((match = fieldPattern.exec(s2Comment)) !== null) {
-                stage2[match[1].toLowerCase()] = match[2].trim();
-              }
-              const featuresMatch = s2Comment.match(/\*\*Features:\*\*\s*([\s\S]*?)(?=\*\*|$)/);
-              if (featuresMatch) {
-                stage2.features = featuresMatch[1].split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean);
-              }
-            }
+            core.setOutput('stage1_num', isNaN(stage1Num) ? '' : stage1Num.toString());
+            core.setOutput('stage2_num', isNaN(stage2Num) ? '' : stage2Num.toString());
 
-            const allData = { stage1, stage2 };
-            console.log('All collected data:', JSON.stringify(allData, null, 2));
-            core.setOutput('all_data', JSON.stringify(allData));
+            // Check confirmation
+            const confirmation = formData.confirmation || '';
+            const confirmed = confirmation.toLowerCase().includes('yes');
+            core.setOutput('confirmed', confirmed ? 'true' : 'false');
 
-      - name: Post Final Summary & Close Issue
+            return formData;
+
+      - name: Load All Stage Data
+        id: load-all
         uses: actions/github-script@v7
+        env:
+          STAGE1_NUM: ${{ steps.parse.outputs.stage1_num }}
+          STAGE2_NUM: ${{ steps.parse.outputs.stage2_num }}
         with:
           script: |
-            const stage3 = JSON.parse('${{ steps.parse.outputs.form_data }}');
-            const allData = JSON.parse('${{ steps.load-all.outputs.all_data }}');
-            const confirmed = '${{ steps.parse.outputs.confirmed }}' === 'true';
             const repo = context.repo;
-            const issueNumber = context.issue.number;
+            const stage1Num = process.env.STAGE1_NUM;
+            const stage2Num = process.env.STAGE2_NUM;
+
+            const parseIssueBody = (body) => {
+              const formData = {};
+              const sections = body.split(/^### /gm).filter(Boolean);
+              for (const section of sections) {
+                const lines = section.split('\n');
+                const header = lines[0].trim();
+                const content = lines.slice(1).join('\n').trim();
+                const key = header.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+(.)/g, (_, c) => c.toUpperCase());
+                if (content && content !== '_No response_') {
+                  // Handle checkboxes
+                  if (content.includes('- [')) {
+                    const items = [];
+                    const checkboxPattern = /- \[(X| )\] (.+)/g;
+                    let match;
+                    while ((match = checkboxPattern.exec(content)) !== null) {
+                      if (match[1] === 'X') {
+                        items.push(match[2].trim());
+                      }
+                    }
+                    formData[key] = items;
+                  } else {
+                    formData[key] = content;
+                  }
+                }
+              }
+              return formData;
+            };
+
+            let stage1Data = {};
+            let stage2Data = {};
+
+            // Fetch Stage 1 data
+            if (stage1Num) {
+              try {
+                const stage1Issue = await github.rest.issues.get({
+                  owner: repo.owner,
+                  repo: repo.repo,
+                  issue_number: parseInt(stage1Num)
+                });
+                stage1Data = parseIssueBody(stage1Issue.data.body);
+                console.log('Stage 1 data:', JSON.stringify(stage1Data, null, 2));
+              } catch (e) {
+                console.log('Could not fetch Stage 1:', e.message);
+              }
+            }
+
+            // Fetch Stage 2 data
+            if (stage2Num) {
+              try {
+                const stage2Issue = await github.rest.issues.get({
+                  owner: repo.owner,
+                  repo: repo.repo,
+                  issue_number: parseInt(stage2Num)
+                });
+                stage2Data = parseIssueBody(stage2Issue.data.body);
+                console.log('Stage 2 data:', JSON.stringify(stage2Data, null, 2));
+              } catch (e) {
+                console.log('Could not fetch Stage 2:', e.message);
+              }
+            }
+
+            const allData = { stage1: stage1Data, stage2: stage2Data };
+            core.setOutput('all_data', JSON.stringify(allData));
+
+      - name: Close Previous Stage Issues
+        uses: actions/github-script@v7
+        env:
+          STAGE1_NUM: ${{ steps.parse.outputs.stage1_num }}
+          STAGE2_NUM: ${{ steps.parse.outputs.stage2_num }}
+          CONFIRMED: ${{ steps.parse.outputs.confirmed }}
+        with:
+          script: |
+            const repo = context.repo;
+            const stage1Num = process.env.STAGE1_NUM;
+            const stage2Num = process.env.STAGE2_NUM;
+            const stage3Num = context.issue.number;
+            const confirmed = process.env.CONFIRMED === 'true';
+
+            const status = confirmed ? 'CONFIRMED' : 'CANCELLED';
+
+            // Close Stage 1 if still open
+            if (stage1Num) {
+              try {
+                const stage1Issue = await github.rest.issues.get({
+                  owner: repo.owner,
+                  repo: repo.repo,
+                  issue_number: parseInt(stage1Num)
+                });
+
+                if (stage1Issue.data.state === 'open') {
+                  const closeComment = [
+                    '## Wizard Complete - ' + status,
+                    '',
+                    'All stages have been completed. See Stage 3 for final summary.',
+                    '',
+                    '**Related Issues:**',
+                    '- Stage 2: #' + stage2Num,
+                    '- Stage 3: #' + stage3Num + ' (final summary)',
+                    '',
+                    '---',
+                    '*Closed by Stage 3 completion*'
+                  ].join('\n');
+
+                  await github.rest.issues.createComment({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    issue_number: parseInt(stage1Num),
+                    body: closeComment
+                  });
+
+                  await github.rest.issues.update({
+                    owner: repo.owner,
+                    repo: repo.repo,
+                    issue_number: parseInt(stage1Num),
+                    state: 'closed',
+                    labels: ['wizard', 'stage-1', 'form-submission', 'completed']
+                  });
+                  console.log('Closed Stage 1 issue #' + stage1Num);
+                }
+              } catch (e) {
+                console.log('Could not close Stage 1:', e.message);
+              }
+            }
+
+            // Close Stage 2
+            if (stage2Num) {
+              try {
+                const closeComment = [
+                  '## Wizard Complete - ' + status,
+                  '',
+                  'All stages have been completed. See Stage 3 for final summary.',
+                  '',
+                  '**Related Issues:**',
+                  '- Stage 1: #' + stage1Num,
+                  '- Stage 3: #' + stage3Num + ' (final summary)',
+                  '',
+                  '---',
+                  '*Closed by Stage 3 completion*'
+                ].join('\n');
+
+                await github.rest.issues.createComment({
+                  owner: repo.owner,
+                  repo: repo.repo,
+                  issue_number: parseInt(stage2Num),
+                  body: closeComment
+                });
+
+                await github.rest.issues.update({
+                  owner: repo.owner,
+                  repo: repo.repo,
+                  issue_number: parseInt(stage2Num),
+                  state: 'closed',
+                  labels: ['wizard', 'stage-2', 'form-submission', 'completed']
+                });
+                console.log('Closed Stage 2 issue #' + stage2Num);
+              } catch (e) {
+                console.log('Could not close Stage 2:', e.message);
+              }
+            }
+
+      - name: Post Final Summary & Close
+        uses: actions/github-script@v7
+        env:
+          STAGE1_NUM: ${{ steps.parse.outputs.stage1_num }}
+          STAGE2_NUM: ${{ steps.parse.outputs.stage2_num }}
+          CONFIRMED: ${{ steps.parse.outputs.confirmed }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+        with:
+          script: |
+            const stage3Data = ${{ steps.parse.outputs.form_data }};
+            const allData = ${{ steps.load-all.outputs.all_data }};
+            const confirmed = process.env.CONFIRMED === 'true';
+            const stage1Num = process.env.STAGE1_NUM;
+            const stage2Num = process.env.STAGE2_NUM;
+            const stage3Num = context.issue.number;
+            const runId = process.env.WORKFLOW_RUN_ID;
+            const repo = context.repo;
 
             const stage1 = allData.stage1 || {};
             const stage2 = allData.stage2 || {};
-            const features = (stage2.features || []).map(f => `✓ ${f}`).join('\n') || 'None';
 
-            const finalSummary = `## 🎉 Wizard Complete ${confirmed ? '✅' : '❌'}
+            // Format features
+            const features = stage2.requiredFeatures || stage2.features || [];
+            const featuresList = Array.isArray(features) && features.length > 0
+              ? features.map(f => '- ' + f).join('\n')
+              : '- None selected';
 
-            **Status:** ${confirmed ? 'CONFIRMED - Ready for resource creation!' : 'CANCELLED'}
+            const statusText = confirmed ? 'Confirmed' : 'Cancelled';
+            const statusEmoji = confirmed ? '✅' : '❌';
+            const statusMessage = confirmed ? 'CONFIRMED - Ready for resource creation!' : 'CANCELLED by user';
 
-            ---
-
-            ### 📋 Complete Project Summary
-
-            | Stage | Field | Value |
-            |-------|-------|-------|
-            | 1 | Project Name | ${stage1.projectName || '-'} |
-            | 1 | Project Type | ${stage1.projectType || '-'} |
-            | 1 | Team Size | ${stage1.teamSize || '-'} |
-            | 1 | Owner | ${stage1.projectOwnerEmail || '-'} |
-            | 2 | Language | ${stage2.language || '-'} |
-            | 2 | Framework | ${stage2.framework || '-'} |
-            | 2 | Environment | ${stage2.environment || '-'} |
-            | 3 | Confirmation | ${stage3.confirmation || '-'} |
-
-            ### Features
-            \`\`\`
-            ${features}
-            \`\`\`
-
-            ### Project Description
-            > ${stage1.projectDescription || 'N/A'}
-
-            ${stage3.notes ? `### Additional Notes\n> ${stage3.notes}` : ''}
-
-            ---
-            **Run ID:** \`${{ github.run_id }}\``;
+            const finalSummary = [
+              '## Project Request ' + statusText + ' ' + statusEmoji,
+              '',
+              '**Status:** ' + statusMessage,
+              '',
+              '---',
+              '',
+              '### Related Issues',
+              '',
+              '| Stage | Issue | Description |',
+              '|-------|-------|-------------|',
+              '| 1 | #' + stage1Num + ' | Project Information |',
+              '| 2 | #' + stage2Num + ' | Technical Configuration |',
+              '| 3 | #' + stage3Num + ' | Review & Confirmation |',
+              '',
+              '---',
+              '',
+              '### Complete Project Summary',
+              '',
+              '#### Stage 1: Project Information',
+              '',
+              '| Field | Value |',
+              '|-------|-------|',
+              '| Project Name | ' + (stage1.projectName || '-') + ' |',
+              '| Project Type | ' + (stage1.projectType || '-') + ' |',
+              '| Team Size | ' + (stage1.teamSize || '-') + ' |',
+              '| Owner Email | ' + (stage1.projectOwnerEmail || stage1.ownerEmail || '-') + ' |',
+              '',
+              '**Description:**',
+              '> ' + (stage1.projectDescription || 'N/A'),
+              '',
+              '#### Stage 2: Technical Configuration',
+              '',
+              '| Field | Value |',
+              '|-------|-------|',
+              '| Language | ' + (stage2.primaryLanguage || stage2.language || '-') + ' |',
+              '| Framework | ' + (stage2.framework || '-') + ' |',
+              '| Environment | ' + (stage2.targetEnvironments || stage2.environment || '-') + ' |',
+              '',
+              '**Features:**',
+              featuresList,
+              '',
+              '#### Stage 3: Confirmation',
+              '',
+              '| Field | Value |',
+              '|-------|-------|',
+              '| Decision | ' + (stage3Data.confirmation || '-') + ' |',
+              '',
+              stage3Data.additionalNotes ? '**Additional Notes:**\n> ' + stage3Data.additionalNotes : '',
+              '',
+              '---',
+              '**Workflow Run:** `' + runId + '`',
+              '*Completed: ' + new Date().toISOString() + '*'
+            ].join('\n');
 
             await github.rest.issues.createComment({
               owner: repo.owner,
               repo: repo.repo,
-              issue_number: issueNumber,
+              issue_number: stage3Num,
               body: finalSummary
             });
 
-            // Update labels and close
-            const currentLabels = context.payload.issue.labels.map(l => l.name);
-            const newLabels = currentLabels
-              .filter(l => !l.startsWith('awaiting-') && l !== 'stage-1')
-              .concat(['completed']);
-
-            await github.rest.issues.setLabels({
-              owner: repo.owner,
-              repo: repo.repo,
-              issue_number: issueNumber,
-              labels: newLabels
-            });
-
+            // Close Stage 3
             await github.rest.issues.update({
               owner: repo.owner,
               repo: repo.repo,
-              issue_number: issueNumber,
-              state: 'closed'
+              issue_number: stage3Num,
+              state: 'closed',
+              labels: ['wizard', 'stage-3', 'form-submission', 'completed']
             });
 
             console.log('Wizard complete!', confirmed ? 'Confirmed' : 'Cancelled');

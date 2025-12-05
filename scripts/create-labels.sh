@@ -10,6 +10,8 @@ gh label create "wizard" --description "Multi-stage wizard form" --color "7C3AED
 gh label create "stage-1" --description "Wizard Stage 1: Project Info" --color "8B5CF6" --repo "$REPO" 2>/dev/null || echo "Label 'stage-1' already exists"
 gh label create "stage-2" --description "Wizard Stage 2: Technical Config" --color "A78BFA" --repo "$REPO" 2>/dev/null || echo "Label 'stage-2' already exists"
 gh label create "stage-3" --description "Wizard Stage 3: Review & Confirm" --color "C4B5FD" --repo "$REPO" 2>/dev/null || echo "Label 'stage-3' already exists"
+gh label create "awaiting-stage-2" --description "Awaiting Stage 2 submission" --color "FCD34D" --repo "$REPO" 2>/dev/null || echo "Label 'awaiting-stage-2' already exists"
+gh label create "awaiting-stage-3" --description "Awaiting Stage 3 submission" --color "FBBF24" --repo "$REPO" 2>/dev/null || echo "Label 'awaiting-stage-3' already exists"
 
 # General form labels
 gh label create "form-submission" --description "Issue created from form template" --color "0EA5E9" --repo "$REPO" 2>/dev/null || echo "Label 'form-submission' already exists"
