@@ -1,0 +1,62 @@
+name: "Stage 1: Project Information"
+description: "Start a new project request - Step 1 of 3"
+title: "[PROJECT] "
+labels: ["form-submission", "stage-1", "wizard"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Step 1 of 3: Project Information
+        Tell us about your project. After submission, you'll be prompted for technical details.
+
+  - type: input
+    id: project_name
+    attributes:
+      label: Project Name
+      description: A unique name for your project
+      placeholder: "my-awesome-project"
+    validations:
+      required: true
+
+  - type: textarea
+    id: project_description
+    attributes:
+      label: Project Description
+      description: Briefly describe what this project does
+      placeholder: "This project will..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: project_type
+    attributes:
+      label: Project Type
+      options:
+        - Web Application
+        - API Service
+        - CLI Tool
+        - Library/Package
+        - Infrastructure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: team_size
+    attributes:
+      label: Team Size
+      options:
+        - "1 (Solo)"
+        - "2-5 (Small)"
+        - "6-10 (Medium)"
+        - "10+ (Large)"
+    validations:
+      required: true
+
+  - type: input
+    id: owner_email
+    attributes:
+      label: Project Owner Email
+      description: Who is responsible for this project?
+      placeholder: "owner@example.com"
+    validations:
+      required: true
