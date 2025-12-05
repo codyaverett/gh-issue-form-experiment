@@ -40,7 +40,7 @@ body:
         - "React"
         - "Vue"
         - "Express"
-        - "None"
+        - "No framework"
     validations:
       required: true
 
