@@ -1,0 +1,97 @@
+{
+  "name": "Stage 2: Technical Configuration",
+  "description": "Step 2 of 3 - Configure technical details with live data from the repository",
+  "fields": [
+    {
+      "id": "stage1_issue",
+      "type": "hidden",
+      "source": "url_param",
+      "param": "stage1_issue"
+    },
+    {
+      "id": "project_name",
+      "type": "hidden",
+      "source": "url_param",
+      "param": "project_name"
+    },
+    {
+      "id": "target_branch",
+      "type": "dropdown",
+      "label": "Target Branch",
+      "description": "Select the branch to deploy from (fetched live from repository)",
+      "source": "github_api",
+      "endpoint": "branches",
+      "required": true,
+      "passToNextStage": true
+    },
+    {
+      "id": "release_version",
+      "type": "dropdown",
+      "label": "Release Version",
+      "description": "Optionally select a specific release or tag",
+      "source": "github_api",
+      "endpoint": "releases",
+      "required": false
+    },
+    {
+      "id": "primary_language",
+      "type": "dropdown",
+      "label": "Primary Language",
+      "description": "Select the primary programming language",
+      "source": "static",
+      "options": [
+        "TypeScript",
+        "JavaScript",
+        "Python",
+        "Go",
+        "Rust",
+        "Java",
+        "Other"
+      ],
+      "required": true,
+      "passToNextStage": true
+    },
+    {
+      "id": "framework",
+      "type": "dropdown",
+      "label": "Framework",
+      "description": "Framework options change based on the project type selected in Stage 1",
+      "source": "conditional",
+      "depends_on": "project_type",
+      "conditions": {
+        "Web Application": ["React", "Vue", "Angular", "Svelte", "Next.js", "Nuxt", "Other"],
+        "API Service": ["Express", "Fastify", "NestJS", "Flask", "FastAPI", "Django", "Gin", "Echo", "Other"],
+        "CLI Tool": ["Commander.js", "Yargs", "Click", "Typer", "Cobra", "Clap", "Other"],
+        "Library": ["No framework"],
+        "Infrastructure": ["Terraform", "Pulumi", "CDK", "CloudFormation", "Other"],
+        "default": ["No framework", "Other"]
+      },
+      "required": true,
+      "passToNextStage": true
+    },
+    {
+      "id": "labels",
+      "type": "checkboxes",
+      "label": "Labels",
+      "description": "Select labels to apply (fetched live from repository)",
+      "source": "github_api",
+      "endpoint": "labels",
+      "filter": "^(priority|type|status)-",
+      "required": false
+    },
+    {
+      "id": "additional_notes",
+      "type": "textarea",
+      "label": "Additional Configuration Notes",
+      "description": "Any additional technical details or requirements",
+      "placeholder": "Enter any additional configuration notes...",
+      "required": false,
+      "rows": 4
+    }
+  ],
+  "output": {
+    "mode": "prefilled_url",
+    "template": "stage-3-confirm.yml",
+    "labels": ["wizard", "stage-2", "form-submission"]
+  }
+}

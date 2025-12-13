@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub Issue Form Wizard</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+    .hero { text-align: center; padding: 48px 16px; }
+    .hero h1 { font-size: 32px; margin-bottom: 16px; }
+    .hero p { font-size: 18px; color: var(--fgColor-muted, #656d76); margin-bottom: 32px; }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .card { padding: 24px; text-align: left; }
+    .card h3 { margin: 0 0 8px 0; font-size: 18px; }
+    .card p { margin: 0 0 16px 0; color: var(--fgColor-muted, #656d76); font-size: 14px; }
+    .features { margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--borderColor-default, #d0d7de); }
+    .features h2 { font-size: 20px; margin-bottom: 24px; }
+    .feature-list { list-style: none; padding: 0; margin: 0; }
+    .feature-list li { padding: 8px 0; padding-left: 24px; position: relative; }
+    .feature-list li::before { content: "✓"; position: absolute; left: 0; color: var(--fgColor-success, #1a7f37); }
+  </style>
+</head>
+<body>
+  <div class="container-md">
+    <div class="hero">
+      <h1>GitHub Issue Form Wizard</h1>
+      <p>Dynamic forms with live GitHub data for issue creation workflows</p>
+    </div>
+
+    <div class="card-grid">
+      <div class="Box card">
+        <h3>Start New Project</h3>
+        <p>Begin a new project configuration wizard with dynamic branch and release selection.</p>
+        <a href="form.html?form=stage-2-dynamic" class="btn btn-primary">Start Wizard</a>
+      </div>
+
+      <div class="Box card">
+        <h3>Native Issue Forms</h3>
+        <p>Use the standard GitHub Issue Forms for Stage 1 entry.</p>
+        <a id="native-form-link" href="#" class="btn btn-secondary">Open Stage 1 Form</a>
+      </div>
+    </div>
+
+    <div class="features">
+      <h2>Features</h2>
+      <ul class="feature-list">
+        <li>Dynamic dropdowns populated with live GitHub data (branches, releases, tags)</li>
+        <li>Conditional fields that change based on previous selections</li>
+        <li>Label selection with color swatches from your repository</li>
+        <li>Seamless integration with GitHub Issue Forms via pre-filled URLs</li>
+        <li>No server required - runs entirely on GitHub Pages</li>
+        <li>Caching to minimize API calls and respect rate limits</li>
+        <li>Optional token authentication for higher rate limits</li>
+      </ul>
+    </div>
+
+    <div class="features">
+      <h2>How It Works</h2>
+      <ol style="padding-left: 20px; color: var(--fgColor-muted, #656d76);">
+        <li style="margin-bottom: 8px;">User submits Stage 1 via native GitHub Issue Form</li>
+        <li style="margin-bottom: 8px;">Workflow posts a link to this dynamic form with URL parameters</li>
+        <li style="margin-bottom: 8px;">Dynamic form fetches live data from GitHub API</li>
+        <li style="margin-bottom: 8px;">User fills form; conditional fields update based on selections</li>
+        <li style="margin-bottom: 8px;">Form generates a pre-filled GitHub Issue URL for Stage 3</li>
+        <li>Process continues through the multi-stage wizard</li>
+      </ol>
+    </div>
+
+    <div class="features" style="text-align: center; padding-bottom: 48px;">
+      <p style="color: var(--fgColor-muted, #656d76); font-size: 14px;">
+        Part of the <a href="https://github.com/caavere/gh-issue-form-experiment" style="color: var(--fgColor-accent, #0969da);">gh-issue-form-experiment</a> project
+      </p>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script>
+    // Update native form link with correct repo
+    const config = window.FORM_CONFIG;
+    const nativeLink = document.getElementById('native-form-link');
+    nativeLink.href = `https://github.com/${config.owner}/${config.repo}/issues/new?template=stage-1-project-info.yml`;
+  </script>
+</body>
+</html>

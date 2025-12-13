@@ -65,8 +65,20 @@ jobs:
             const issueNumber = context.issue.number;
             const runId = process.env.WORKFLOW_RUN_ID;
 
-            // Generate pre-filled Stage 2 URL
-            const stage2Url = 'https://github.com/' + repo.owner + '/' + repo.repo + '/issues/new?template=stage-2-technical-config.yml&stage1_issue=%23' + issueNumber;
+            // Generate Stage 2 URL - use dynamic GitHub Pages form
+            // This form fetches live data (branches, releases, labels) from GitHub API
+            // and shows conditional fields based on project type
+            const pagesBase = `https://${repo.owner}.github.io/${repo.repo}`;
+            const stage2Params = new URLSearchParams({
+              form: 'stage-2-dynamic',
+              stage1_issue: '#' + issueNumber,
+              project_name: formData.projectName || '',
+              project_type: formData.projectType || ''
+            });
+            const stage2Url = `${pagesBase}/form.html?${stage2Params.toString()}`;
+
+            // Also provide fallback to static form
+            const staticFormUrl = 'https://github.com/' + repo.owner + '/' + repo.repo + '/issues/new?template=stage-2-technical-config.yml&stage1_issue=%23' + issueNumber;
 
             // Post Stage 2 link comment
             const comment = [
@@ -81,9 +93,18 @@ jobs:
               '',
               '## Next Step: Stage 2 - Technical Configuration',
               '',
-              'Click the link below to continue to Stage 2. Your Stage 1 reference will be automatically filled in.',
+              'Click the link below to continue. The dynamic form includes:',
+              '- Live branch and release selection from this repository',
+              '- Framework options based on your project type',
+              '- Label selection with color swatches',
               '',
-              '**[Continue to Stage 2](' + stage2Url + ')**',
+              '**[Continue to Stage 2 (Dynamic Form)](' + stage2Url + ')**',
+              '',
+              '<details>',
+              '<summary>Alternative: Use static form</summary>',
+              '',
+              'If the dynamic form is not working, use the [static form](' + staticFormUrl + ') instead.',
+              '</details>',
               '',
               '---',
               '*Workflow Run: `' + runId + '`*'

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dynamic Form - Loading...</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <style>
+    /* Inline critical styles for faster initial render */
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  </style>
+</head>
+<body>
+  <div class="container-md">
+    <header>
+      <h1 id="form-title">Loading...</h1>
+      <p class="text-gray" id="form-description">Please wait while the form loads...</p>
+    </header>
+
+    <!-- Stage indicator -->
+    <div class="stage-indicator" id="stage-indicator" style="display: none;">
+      <div class="stage-step completed">1</div>
+      <div class="stage-connector completed"></div>
+      <div class="stage-step current">2</div>
+      <div class="stage-connector"></div>
+      <div class="stage-step pending">3</div>
+    </div>
+
+    <!-- Auth banner -->
+    <div id="auth-banner" class="flash flash-info mb-4" style="display: none;">
+      <strong>Tip:</strong> Sign in with a GitHub token for higher rate limits and access to more data.
+      <button id="auth-button" class="btn btn-secondary btn-sm" style="margin-left: 8px;">Add Token</button>
+      <span id="auth-status" style="margin-left: 8px;"></span>
+    </div>
+
+    <!-- Rate limit warning -->
+    <div id="rate-limit-banner" class="flash flash-warn mb-4" style="display: none;">
+      <strong>Rate Limited:</strong> <span id="rate-limit-message"></span>
+    </div>
+
+    <!-- Error banner -->
+    <div id="error-banner" class="flash flash-error mb-4" style="display: none;">
+      <strong>Error:</strong> <span id="error-message"></span>
+    </div>
+
+    <!-- Main form -->
+    <form id="dynamic-form" class="Box p-4">
+      <div id="form-fields">
+        <div class="loading-spinner">Loading form...</div>
+      </div>
+
+      <div class="form-actions mt-4 pt-4" style="border-top: 1px solid var(--borderColor-default, #d0d7de);">
+        <button type="submit" class="btn btn-primary" id="submit-btn" disabled>
+          Continue to Next Stage
+        </button>
+        <button type="button" class="btn btn-secondary" id="preview-btn">
+          Preview
+        </button>
+      </div>
+    </form>
+
+    <!-- Preview modal -->
+    <div id="output-preview" class="Box mt-4 p-4" style="display: none;">
+      <h3 style="margin-top: 0;">Preview Issue Body</h3>
+      <pre id="preview-content"></pre>
+      <div style="margin-top: 16px;">
+        <a id="preview-link" class="btn btn-primary" href="#" target="_blank">
+          Open Pre-filled Issue Form
+        </a>
+        <button type="button" class="btn btn-secondary" id="close-preview">
+          Close Preview
+        </button>
+      </div>
+    </div>
+
+    <!-- Rate limit status -->
+    <div id="rate-limit-status" class="rate-limit-warning mt-3" style="display: none;">
+      API requests remaining: <span id="rate-remaining">--</span>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/config.js"></script>
+  <script src="js/github-api.js"></script>
+  <script src="js/form-builder.js"></script>
+  <script>
+    (function() {
+      'use strict';
+
+      let api = null;
+      let builder = null;
+
+      // Initialize the form
+      async function init() {
+        const config = window.FORM_CONFIG;
+        const urlParams = new URLSearchParams(window.location.search);
+
+        // Get form name from URL or use default
+        const formName = urlParams.get('form') || config.defaultForm;
+
+        try {
+          // Load form schema
+          const schemaResponse = await fetch(`forms/${formName}.json`);
+          if (!schemaResponse.ok) {
+            throw new Error(`Form schema not found: ${formName}`);
+          }
+          const schema = await schemaResponse.json();
+
+          // Update page metadata
+          document.getElementById('form-title').textContent = schema.name;
+          document.getElementById('form-description').textContent = schema.description;
+          document.title = schema.name;
+
+          // Show stage indicator if this is a wizard stage
+          if (formName.includes('stage-')) {
+            document.getElementById('stage-indicator').style.display = 'flex';
+            updateStageIndicator(formName);
+          }
+
+          // Initialize API client
+          const token = GitHubAPI.getStoredToken();
+          api = new GitHubAPI(config.owner, config.repo, token);
+
+          // Update auth UI
+          updateAuthUI(token);
+
+          // Initialize form builder
+          builder = new FormBuilder(api, schema);
+
+          // Render form fields
+          await renderForm(schema);
+
+          // Enable submit button
+          document.getElementById('submit-btn').disabled = false;
+
+          // Update rate limit display
+          updateRateLimitDisplay();
+
+        } catch (error) {
+          console.error('Failed to initialize form:', error);
+          showError(error.message);
+        }
+      }
+
+      // Render all form fields
+      async function renderForm(schema) {
+        const container = document.getElementById('form-fields');
+        container.innerHTML = '';
+
+        for (const field of schema.fields) {
+          try {
+            // Show loading state for API fields
+            if (field.source === 'github_api') {
+              const loadingDiv = document.createElement('div');
+              loadingDiv.className = 'form-group mb-4 field-loading';
+              loadingDiv.id = `loading-${field.id}`;
+              loadingDiv.innerHTML = `
+                <label class="form-label d-block mb-1">${field.label}</label>
+                <div class="loading-spinner" style="justify-content: flex-start; padding: 8px 0;">
+                  Loading ${field.endpoint}...
+                </div>
+              `;
+              container.appendChild(loadingDiv);
+            }
+
+            // Load options
+            const options = await builder.loadFieldOptions(field);
+
+            // Remove loading state
+            const loadingEl = document.getElementById(`loading-${field.id}`);
+            if (loadingEl) {
+              loadingEl.remove();
+            }
+
+            // Render field
+            const fieldEl = builder.renderField(field, options);
+            container.appendChild(fieldEl);
+
+          } catch (error) {
+            console.error(`Error loading field ${field.id}:`, error);
+
+            // Show error for this field
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'form-group mb-4';
+            errorDiv.innerHTML = `
+              <label class="form-label d-block mb-1">${field.label}</label>
+              <div class="flash flash-error" style="padding: 8px 12px;">
+                Failed to load: ${error.message}
+              </div>
+            `;
+            container.appendChild(errorDiv);
+
+            // Check if it's a rate limit error
+            if (error instanceof RateLimitError) {
+              showRateLimitWarning(error.message);
+            }
+          }
+        }
+      }
+
+      // Update stage indicator based on current stage
+      function updateStageIndicator(formName) {
+        const indicator = document.getElementById('stage-indicator');
+        const steps = indicator.querySelectorAll('.stage-step');
+        const connectors = indicator.querySelectorAll('.stage-connector');
+
+        const currentStage = parseInt(formName.match(/stage-(\d+)/)?.[1] || '1', 10);
+
+        steps.forEach((step, index) => {
+          const stageNum = index + 1;
+          step.classList.remove('completed', 'current', 'pending');
+
+          if (stageNum < currentStage) {
+            step.classList.add('completed');
+          } else if (stageNum === currentStage) {
+            step.classList.add('current');
+          } else {
+            step.classList.add('pending');
+          }
+        });
+
+        connectors.forEach((connector, index) => {
+          connector.classList.remove('completed');
+          if (index < currentStage - 1) {
+            connector.classList.add('completed');
+          }
+        });
+      }
+
+      // Update auth UI
+      function updateAuthUI(token) {
+        const banner = document.getElementById('auth-banner');
+        const status = document.getElementById('auth-status');
+        const button = document.getElementById('auth-button');
+
+        banner.style.display = 'block';
+
+        if (token) {
+          status.textContent = '(Token configured)';
+          status.style.color = 'var(--fgColor-success, #1a7f37)';
+          button.textContent = 'Remove Token';
+          button.onclick = () => {
+            GitHubAPI.clearToken();
+            location.reload();
+          };
+        } else {
+          status.textContent = '';
+          button.textContent = 'Add Token';
+          button.onclick = promptForToken;
+        }
+      }
+
+      // Prompt user for PAT
+      function promptForToken() {
+        const token = prompt(
+          'Enter a GitHub Personal Access Token (with "repo" or "public_repo" scope):\n\n' +
+          'This increases rate limits from 60 to 5000 requests/hour.\n' +
+          'Create one at: https://github.com/settings/tokens'
+        );
+
+        if (token && token.trim()) {
+          GitHubAPI.storeToken(token.trim());
+          location.reload();
+        }
+      }
+
+      // Show error message
+      function showError(message) {
+        const banner = document.getElementById('error-banner');
+        const messageEl = document.getElementById('error-message');
+        messageEl.textContent = message;
+        banner.style.display = 'block';
+
+        // Also update form fields area
+        const container = document.getElementById('form-fields');
+        container.innerHTML = `
+          <div class="flash flash-error">
+            Failed to load form: ${message}
+          </div>
+        `;
+      }
+
+      // Show rate limit warning
+      function showRateLimitWarning(message) {
+        const banner = document.getElementById('rate-limit-banner');
+        const messageEl = document.getElementById('rate-limit-message');
+        messageEl.textContent = message;
+        banner.style.display = 'block';
+      }
+
+      // Update rate limit display
+      function updateRateLimitDisplay() {
+        if (!api) return;
+
+        const status = api.getRateLimitStatus();
+        const display = document.getElementById('rate-limit-status');
+        const remaining = document.getElementById('rate-remaining');
+
+        if (status.remaining !== null) {
+          display.style.display = 'block';
+          remaining.textContent = status.remaining;
+
+          if (status.isLow) {
+            display.classList.add('low');
+          }
+        }
+      }
+
+      // Handle form submission
+      function handleSubmit(e) {
+        e.preventDefault();
+
+        if (!builder) return;
+
+        // Validate
+        const validation = builder.validate();
+        if (!validation.valid) {
+          const messages = validation.errors.map(e => e.message).join('\n');
+          alert('Please fix the following errors:\n\n' + messages);
+          return;
+        }
+
+        // Generate pre-filled URL and redirect
+        const url = builder.generatePrefilledUrl();
+        window.location.href = url;
+      }
+
+      // Handle preview
+      function handlePreview() {
+        if (!builder) return;
+
+        const preview = document.getElementById('output-preview');
+        const content = document.getElementById('preview-content');
+        const link = document.getElementById('preview-link');
+
+        content.textContent = builder.generateIssueBody();
+        link.href = builder.generatePrefilledUrl();
+        preview.style.display = 'block';
+
+        // Scroll to preview
+        preview.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      // Close preview
+      function closePreview() {
+        document.getElementById('output-preview').style.display = 'none';
+      }
+
+      // Set up event listeners
+      document.getElementById('dynamic-form').addEventListener('submit', handleSubmit);
+      document.getElementById('preview-btn').addEventListener('click', handlePreview);
+      document.getElementById('close-preview').addEventListener('click', closePreview);
+
+      // Initialize on DOM ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        init();
+      }
+    })();
+  </script>
+</body>
+</html>
